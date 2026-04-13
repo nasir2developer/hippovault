@@ -12,19 +12,35 @@ const app = express();
 const port = Number(process.env.PORT || 3000);
 const isProduction = process.env.NODE_ENV === "production";
 
-const getRequiredEnv = (name, message) => {
-  const value = process.env[name];
+app.set("trust proxy", 1);
+
+const getEnv = (...names) => {
+  for (const name of names) {
+    const value = process.env[name];
+    if (value) return value;
+  }
+  return "";
+};
+
+const getRequiredEnv = (names, message) => {
+  const value = getEnv(...names);
   if (!value) {
     throw new Error(message);
   }
   return value;
 };
 
-const databaseUrl = getRequiredEnv("DATABASE_URL", "DATABASE_URL is required.");
-const sessionSecret = getRequiredEnv("SESSION_SECRET", "SESSION_SECRET is required.");
+const databaseUrl = getRequiredEnv(
+  ["DATABASE_URL", "hippovault_POSTGRES_URL", "hippovault_POSTGRES_URL_NON_POOLING"],
+  "DATABASE_URL or hippovault_POSTGRES_URL is required."
+);
+const sessionSecret = getRequiredEnv(
+  ["SESSION_SECRET", "hippovault_SESSION_SECRET", "hippovault_SUPABASE_JWT_SECRET"],
+  "SESSION_SECRET or hippovault_SESSION_SECRET is required."
+);
 const dataEncryptionKey = getRequiredEnv(
-  "DATA_ENCRYPTION_KEY",
-  "DATA_ENCRYPTION_KEY is required (32-byte key in base64)."
+  ["DATA_ENCRYPTION_KEY", "hippovault_DATA_ENCRYPTION_KEY"],
+  "DATA_ENCRYPTION_KEY or hippovault_DATA_ENCRYPTION_KEY is required (32-byte key in base64)."
 );
 
 const encryptionKey = Buffer.from(dataEncryptionKey, "base64");
@@ -38,8 +54,20 @@ const pool = new Pool({
 });
 
 const parseOrigins = () => {
-  const raw = process.env.CORS_ORIGIN || "http://localhost:3000";
-  return raw.split(",").map((item) => item.trim()).filter(Boolean);
+  const configured = getEnv("CORS_ORIGIN", "hippovault_CORS_ORIGIN")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const defaults = ["http://localhost:3000"];
+
+  if (process.env.VERCEL_URL) {
+    defaults.push(`https://${process.env.VERCEL_URL}`);
+  }
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    defaults.push(`https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`);
+  }
+
+  return [...new Set([...configured, ...defaults])];
 };
 
 const allowedOrigins = parseOrigins();
