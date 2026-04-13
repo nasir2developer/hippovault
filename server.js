@@ -14,9 +14,11 @@ const isProduction = process.env.NODE_ENV === "production";
 
 app.set("trust proxy", 1);
 
+const normalizeEnvValue = (value) => String(value || "").trim().replace(/^"(.*)"$/, "$1");
+
 const getEnv = (...names) => {
   for (const name of names) {
-    const value = process.env[name];
+    const value = normalizeEnvValue(process.env[name]);
     if (value) return value;
   }
   return "";
