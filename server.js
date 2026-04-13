@@ -10,24 +10,31 @@ require("dotenv").config();
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
+const isProduction = process.env.NODE_ENV === "production";
 
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL is required.");
-}
-if (!process.env.SESSION_SECRET) {
-  throw new Error("SESSION_SECRET is required.");
-}
-if (!process.env.DATA_ENCRYPTION_KEY) {
-  throw new Error("DATA_ENCRYPTION_KEY is required (32-byte key in base64).");
-}
+const getRequiredEnv = (name, message) => {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(message);
+  }
+  return value;
+};
 
-const encryptionKey = Buffer.from(process.env.DATA_ENCRYPTION_KEY, "base64");
+const databaseUrl = getRequiredEnv("DATABASE_URL", "DATABASE_URL is required.");
+const sessionSecret = getRequiredEnv("SESSION_SECRET", "SESSION_SECRET is required.");
+const dataEncryptionKey = getRequiredEnv(
+  "DATA_ENCRYPTION_KEY",
+  "DATA_ENCRYPTION_KEY is required (32-byte key in base64)."
+);
+
+const encryptionKey = Buffer.from(dataEncryptionKey, "base64");
 if (encryptionKey.length !== 32) {
   throw new Error("DATA_ENCRYPTION_KEY must decode to 32 bytes.");
 }
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL
+  connectionString: databaseUrl,
+  ssl: isProduction ? { rejectUnauthorized: false } : undefined
 });
 
 const parseOrigins = () => {
@@ -58,13 +65,13 @@ app.use(session({
     tableName: "user_sessions",
     createTableIfMissing: true
   }),
-  secret: process.env.SESSION_SECRET,
+  secret: sessionSecret,
   resave: false,
   saveUninitialized: false,
   cookie: {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: isProduction,
     maxAge: 1000 * 60 * 60 * 24
   }
 }));
@@ -374,6 +381,10 @@ app.get("/dashboard", (_req, res) => {
   res.sendFile(path.join(__dirname, "dashboard.html"));
 });
 
-app.listen(port, () => {
-  console.log(`Server running on http://localhost:${port}`);
-});
+if (require.main === module) {
+  app.listen(port, () => {
+    console.log(`Server running on http://localhost:${port}`);
+  });
+}
+
+module.exports = app;
