@@ -11,6 +11,7 @@ require("dotenv").config();
 const app = express();
 const port = Number(process.env.PORT || 3000);
 const isProduction = process.env.NODE_ENV === "production";
+const publicDir = path.join(__dirname, "public");
 
 app.set("trust proxy", 1);
 
@@ -106,7 +107,7 @@ app.use(session({
   }
 }));
 
-app.use(express.static(path.join(__dirname)));
+app.use(express.static(publicDir));
 
 const encryptText = (value) => {
   const iv = crypto.randomBytes(12);
@@ -404,11 +405,11 @@ app.get("/health", (_req, res) => {
 });
 
 app.get("/", (_req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
+  res.sendFile(path.join(publicDir, "index.html"));
 });
 
 app.get("/dashboard", (_req, res) => {
-  res.sendFile(path.join(__dirname, "dashboard.html"));
+  res.sendFile(path.join(publicDir, "dashboard.html"));
 });
 
 if (require.main === module) {

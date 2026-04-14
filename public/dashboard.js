@@ -1,0 +1,707 @@
+const apiBase = window.location.protocol === "file:" ? "http://localhost:3000" : "";
+
+const api = {
+  me: `${apiBase}/api/auth/me`,
+  logout: `${apiBase}/api/auth/logout`,
+  data: `${apiBase}/api/data`,
+  reviews: `${apiBase}/get-reviews`,
+  reviewSubmit: `${apiBase}/submit-review`
+};
+
+const appRoutes = {
+  home: window.location.protocol === "file:" ? "./index.html" : "/"
+};
+
+const demoKeys = {
+  user: "hippovault-demo-user",
+  enabled: "hippovault-demo-enabled",
+  data: "hippovault-demo-data"
+};
+
+const defaultListSeed = [
+  { id: "default-grocery", name: "Grocery List", locked: true, items: [] },
+  { id: "default-electric", name: "Electric List", locked: true, items: [] },
+  { id: "default-vegetable", name: "Vegetable List", locked: true, items: [] }
+];
+
+const state = {
+  user: null,
+  accounts: [],
+  diaryEntries: [],
+  userLists: [],
+  defaultLists: defaultListSeed.map((item) => ({ ...item })),
+  reviews: [],
+  mode: "api"
+};
+
+const userPill = document.getElementById("userPill");
+const editorModal = document.getElementById("editorModal");
+const editorBody = document.getElementById("editorBody");
+const editorTitle = document.getElementById("editorTitle");
+
+const setFormStatus = (id, message, type = "") => {
+  const node = document.getElementById(id);
+  if (!node) return;
+  node.textContent = message;
+  node.className = "form-status";
+  if (type) node.classList.add(type);
+};
+
+const makeId = () => {
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    return window.crypto.randomUUID();
+  }
+  return `id-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+};
+
+const escapeHtml = (value) => String(value)
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll("\"", "&quot;")
+  .replaceAll("'", "&#039;");
+
+const formatDate = (value) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown date";
+  return date.toLocaleString();
+};
+
+const parseJsonSafe = async (response) => {
+  try {
+    return await response.json();
+  } catch (_error) {
+    return null;
+  }
+};
+
+const apiRequest = async (url, options = {}) => {
+  let response;
+  try {
+    response = await fetch(url, {
+      credentials: "include",
+      ...options
+    });
+  } catch (_error) {
+    throw new Error("Cannot reach the server.");
+  }
+
+  const payload = await parseJsonSafe(response);
+  if (!response.ok) {
+    throw new Error(payload?.message || `Request failed (${response.status}).`);
+  }
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Server returned invalid JSON.");
+  }
+  return payload;
+};
+
+const getDemoUser = () => {
+  try {
+    return JSON.parse(localStorage.getItem(demoKeys.user) || "null");
+  } catch (_error) {
+    return null;
+  }
+};
+
+const getDemoPayload = () => {
+  try {
+    return JSON.parse(localStorage.getItem(demoKeys.data) || "null");
+  } catch (_error) {
+    return null;
+  }
+};
+
+const saveDemoPayload = () => {
+  localStorage.setItem(demoKeys.data, JSON.stringify({
+    accounts: state.accounts,
+    diaryEntries: state.diaryEntries,
+    userLists: state.userLists,
+    defaultLists: state.defaultLists,
+    reviews: state.reviews
+  }));
+};
+
+const goHome = () => {
+  window.location.href = appRoutes.home;
+};
+
+const normalizeListItems = (items) => {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item) => {
+      const itemName = String(item?.itemName || "").trim();
+      if (!itemName) return null;
+      return { id: item.id || makeId(), itemName };
+    })
+    .filter(Boolean);
+};
+
+const normalizeDefaultLists = (items) => {
+  const incoming = new Map((Array.isArray(items) ? items : []).map((item) => [item.id, item]));
+  return defaultListSeed.map((seed) => {
+    const existing = incoming.get(seed.id);
+    return {
+      ...seed,
+      name: String(existing?.name || seed.name).trim(),
+      items: normalizeListItems(existing?.items)
+    };
+  });
+};
+
+const applyPayloadToState = (payload) => {
+  state.accounts = Array.isArray(payload?.accounts) ? payload.accounts : [];
+  state.diaryEntries = Array.isArray(payload?.diaryEntries) ? payload.diaryEntries : [];
+  state.userLists = Array.isArray(payload?.userLists)
+    ? payload.userLists.map((list) => ({
+      id: list.id || makeId(),
+      name: String(list.name || "").trim(),
+      items: normalizeListItems(list.items)
+    }))
+    : [];
+  state.defaultLists = normalizeDefaultLists(payload?.defaultLists);
+  state.reviews = Array.isArray(payload?.reviews)
+    ? payload.reviews.map((item) => ({
+      id: item.id || makeId(),
+      name: String(item.name || "Anonymous"),
+      email: String(item.email || ""),
+      rating: Number(item.rating) || 0,
+      review: String(item.review_text || item.review || ""),
+      createdAt: item.createdAt || item.created_at || new Date().toISOString()
+    }))
+    : [];
+};
+
+const renderStats = () => {
+  document.getElementById("statAccounts").textContent = String(state.accounts.length);
+  document.getElementById("statDiary").textContent = String(state.diaryEntries.length);
+  document.getElementById("statLists").textContent = String(state.userLists.length);
+  document.getElementById("statReviews").textContent = String(state.reviews.length);
+  document.getElementById("accountsCount").textContent = `${state.accounts.length} records`;
+  document.getElementById("diaryCount").textContent = `${state.diaryEntries.length} entries`;
+  document.getElementById("listsCount").textContent = `${state.userLists.length} custom lists`;
+  document.getElementById("reviewsCount").textContent = `${state.reviews.length} reviews`;
+};
+
+const renderAccounts = () => {
+  const container = document.getElementById("accountsList");
+  if (!state.accounts.length) {
+    container.innerHTML = `<article class="empty-card">No account records yet.</article>`;
+    return;
+  }
+  container.innerHTML = state.accounts.map((account) => `
+    <article class="record-card">
+      <div class="record-head">
+        <div>
+          <h4>${escapeHtml(account.appName)}</h4>
+          <small>${escapeHtml(account.username)}</small>
+        </div>
+        <span class="record-badge">Credential</span>
+      </div>
+      <p class="record-line">${escapeHtml(account.appUrl)}</p>
+      <p class="record-line mono">${escapeHtml(account.password)}</p>
+      <div class="record-actions">
+        <button class="btn btn-ghost action-btn" data-type="account" data-action="edit" data-id="${account.id}" type="button">Edit</button>
+        <button class="btn btn-danger action-btn" data-type="account" data-action="delete" data-id="${account.id}" type="button">Delete</button>
+      </div>
+    </article>
+  `).join("");
+};
+
+const renderDiary = () => {
+  const container = document.getElementById("diaryList");
+  if (!state.diaryEntries.length) {
+    container.innerHTML = `<article class="empty-card">No diary entries yet.</article>`;
+    return;
+  }
+  container.innerHTML = state.diaryEntries.map((entry) => `
+    <article class="record-card">
+      <div class="record-head">
+        <div>
+          <h4>${escapeHtml(entry.title)}</h4>
+          <small>${escapeHtml(formatDate(entry.createdAt))}</small>
+        </div>
+        <span class="record-badge">Diary</span>
+      </div>
+      <p class="record-line">${escapeHtml(entry.body)}</p>
+      <div class="record-actions">
+        <button class="btn btn-ghost action-btn" data-type="diary" data-action="edit" data-id="${entry.id}" type="button">Edit</button>
+        <button class="btn btn-danger action-btn" data-type="diary" data-action="delete" data-id="${entry.id}" type="button">Delete</button>
+      </div>
+    </article>
+  `).join("");
+};
+
+const renderListCards = (items, allowDelete) => {
+  if (!items.length) return `<article class="empty-card">No lists available.</article>`;
+  return items.map((list) => `
+    <article class="record-card">
+      <div class="record-head">
+        <div>
+          <h4>${escapeHtml(list.name)}</h4>
+          <small>${Array.isArray(list.items) ? list.items.length : 0} items</small>
+        </div>
+        <span class="record-badge">${allowDelete ? "Custom" : "Default"}</span>
+      </div>
+      <div class="tag-list">
+        ${(Array.isArray(list.items) && list.items.length)
+          ? list.items.map((item) => `<span class="tag-chip">${escapeHtml(item.itemName)}</span>`).join("")
+          : `<span class="tag-chip muted">No items yet</span>`}
+      </div>
+      <div class="record-actions">
+        <button class="btn btn-ghost action-btn" data-type="list" data-action="edit" data-id="${list.id}" type="button">Edit</button>
+        ${allowDelete ? `<button class="btn btn-danger action-btn" data-type="list" data-action="delete" data-id="${list.id}" type="button">Delete</button>` : ""}
+      </div>
+    </article>
+  `).join("");
+};
+
+const renderLists = () => {
+  document.getElementById("defaultLists").innerHTML = renderListCards(state.defaultLists, false);
+  document.getElementById("customLists").innerHTML = renderListCards(state.userLists, true);
+};
+
+const renderReviews = () => {
+  const container = document.getElementById("reviewList");
+  if (!state.reviews.length) {
+    container.innerHTML = `<article class="empty-card">No reviews saved yet.</article>`;
+    return;
+  }
+  container.innerHTML = state.reviews.map((review) => `
+    <article class="record-card">
+      <div class="record-head">
+        <div>
+          <h4>${escapeHtml(review.name)}</h4>
+          <small>${escapeHtml(formatDate(review.createdAt))}</small>
+        </div>
+        <span class="record-badge">${"★".repeat(review.rating)}</span>
+      </div>
+      <p class="record-line">${escapeHtml(review.review)}</p>
+      ${review.email ? `<p class="record-line muted">${escapeHtml(review.email)}</p>` : ""}
+    </article>
+  `).join("");
+};
+
+const renderAll = () => {
+  renderStats();
+  renderAccounts();
+  renderDiary();
+  renderLists();
+  renderReviews();
+};
+
+const syncAll = async () => {
+  if (state.mode === "demo") {
+    saveDemoPayload();
+    return;
+  }
+  await apiRequest(api.data, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      accounts: state.accounts,
+      diaryEntries: state.diaryEntries,
+      userLists: state.userLists,
+      defaultLists: state.defaultLists
+    })
+  });
+};
+
+const loadData = async () => {
+  if (state.mode === "demo") {
+    applyPayloadToState(getDemoPayload());
+    return;
+  }
+
+  const payload = await apiRequest(api.data);
+  if (!payload.success || !payload.data) {
+    throw new Error("Unable to load dashboard data.");
+  }
+
+  applyPayloadToState(payload.data);
+};
+
+const loadReviews = async () => {
+  if (state.mode === "demo") return;
+
+  const payload = await apiRequest(api.reviews);
+  if (!payload.success || !Array.isArray(payload.reviews)) {
+    state.reviews = [];
+    return;
+  }
+
+  state.reviews = payload.reviews.map((item) => ({
+    id: item.id || makeId(),
+    name: String(item.name || "Anonymous"),
+    email: String(item.email || ""),
+    rating: Number(item.rating) || 0,
+    review: String(item.review_text || ""),
+    createdAt: item.created_at || new Date().toISOString()
+  }));
+};
+
+const openEditor = (title, html) => {
+  editorTitle.textContent = title;
+  editorBody.innerHTML = html;
+  editorModal.classList.add("active");
+  editorModal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+};
+
+const closeEditor = () => {
+  editorModal.classList.remove("active");
+  editorModal.setAttribute("aria-hidden", "true");
+  editorBody.innerHTML = "";
+  document.body.classList.remove("modal-open");
+};
+
+const findCollectionItem = (type, id) => {
+  if (type === "account") return state.accounts.find((item) => item.id === id);
+  if (type === "diary") return state.diaryEntries.find((item) => item.id === id);
+  if (type === "list") return state.userLists.find((item) => item.id === id) || state.defaultLists.find((item) => item.id === id);
+  return null;
+};
+
+const openEditAccount = (account) => {
+  openEditor("Edit account", `
+    <form class="stack-form" id="editAccountForm">
+      <div class="field"><label>App name</label><input name="appName" value="${escapeHtml(account.appName)}" required /></div>
+      <div class="field"><label>URL</label><input name="appUrl" value="${escapeHtml(account.appUrl)}" required /></div>
+      <div class="field"><label>Username</label><input name="username" value="${escapeHtml(account.username)}" required /></div>
+      <div class="field"><label>Password</label><input name="password" value="${escapeHtml(account.password)}" required /></div>
+      <div class="form-status" id="editorStatus" aria-live="polite"></div>
+      <button class="btn btn-primary" type="submit">Save Changes</button>
+    </form>
+  `);
+  document.getElementById("editAccountForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    account.appName = String(form.get("appName")).trim();
+    account.appUrl = String(form.get("appUrl")).trim();
+    account.username = String(form.get("username")).trim();
+    account.password = String(form.get("password")).trim();
+    setFormStatus("editorStatus", "Saving...");
+    try {
+      await syncAll();
+      renderAll();
+      closeEditor();
+    } catch (error) {
+      setFormStatus("editorStatus", error.message || "Save failed.", "error");
+    }
+  });
+};
+
+const openEditDiary = (entry) => {
+  openEditor("Edit diary entry", `
+    <form class="stack-form" id="editDiaryForm">
+      <div class="field"><label>Title</label><input name="title" value="${escapeHtml(entry.title)}" required /></div>
+      <div class="field"><label>Description</label><textarea name="body" required>${escapeHtml(entry.body)}</textarea></div>
+      <div class="form-status" id="editorStatus" aria-live="polite"></div>
+      <button class="btn btn-primary" type="submit">Save Changes</button>
+    </form>
+  `);
+  document.getElementById("editDiaryForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    entry.title = String(form.get("title")).trim();
+    entry.body = String(form.get("body")).trim();
+    setFormStatus("editorStatus", "Saving...");
+    try {
+      await syncAll();
+      renderAll();
+      closeEditor();
+    } catch (error) {
+      setFormStatus("editorStatus", error.message || "Save failed.", "error");
+    }
+  });
+};
+
+const renderListEditorRows = (list) => {
+  return (Array.isArray(list.items) && list.items.length)
+    ? list.items.map((item) => `
+      <div class="list-edit-row">
+        <input class="list-item-input" data-item-id="${item.id}" value="${escapeHtml(item.itemName)}" />
+        <button class="btn btn-danger list-item-delete" data-item-id="${item.id}" type="button">Delete</button>
+      </div>
+    `).join("")
+    : `<div class="empty-card">No items yet.</div>`;
+};
+
+const openEditList = (list) => {
+  openEditor("Edit list", `
+    <form class="stack-form" id="editListForm">
+      <div class="field"><label>List name</label><input name="name" value="${escapeHtml(list.name)}" required /></div>
+      <div class="field">
+        <label>Items</label>
+        <div class="list-edit-grid">${renderListEditorRows(list)}</div>
+      </div>
+      <div class="field inline-field">
+        <input id="newListItem" type="text" placeholder="Add new item" />
+        <button class="btn btn-ghost" id="addListItem" type="button">Add Item</button>
+      </div>
+      <div class="form-status" id="editorStatus" aria-live="polite"></div>
+      <button class="btn btn-primary" type="submit">Save List</button>
+    </form>
+  `);
+
+  document.getElementById("addListItem").addEventListener("click", () => {
+    const input = document.getElementById("newListItem");
+    const itemName = input.value.trim();
+    if (!itemName) return;
+    list.items.push({ id: makeId(), itemName });
+    openEditList(list);
+  });
+
+  editorBody.querySelectorAll(".list-item-delete").forEach((button) => {
+    button.addEventListener("click", () => {
+      const itemId = button.dataset.itemId;
+      list.items = list.items.filter((item) => item.id !== itemId);
+      openEditList(list);
+    });
+  });
+
+  document.getElementById("editListForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    list.name = String(form.get("name")).trim();
+    list.items = Array.from(document.querySelectorAll(".list-item-input"))
+      .map((input) => ({
+        id: input.dataset.itemId,
+        itemName: input.value.trim()
+      }))
+      .filter((item) => item.id && item.itemName);
+    setFormStatus("editorStatus", "Saving...");
+    try {
+      await syncAll();
+      renderAll();
+      closeEditor();
+    } catch (error) {
+      setFormStatus("editorStatus", error.message || "Save failed.", "error");
+    }
+  });
+};
+
+const deleteItem = async (type, id) => {
+  if (!window.confirm("Delete this item?")) return;
+  if (type === "account") state.accounts = state.accounts.filter((item) => item.id !== id);
+  if (type === "diary") state.diaryEntries = state.diaryEntries.filter((item) => item.id !== id);
+  if (type === "list") state.userLists = state.userLists.filter((item) => item.id !== id);
+  await syncAll();
+  renderAll();
+};
+
+document.getElementById("accountForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const account = {
+    id: makeId(),
+    appName: String(form.get("appName")).trim(),
+    appUrl: String(form.get("appUrl")).trim(),
+    username: String(form.get("username")).trim(),
+    password: String(form.get("password")).trim(),
+    createdAt: new Date().toISOString()
+  };
+
+  if (!account.appName || !account.appUrl || !account.username || !account.password) {
+    setFormStatus("accountStatus", "Complete all account fields.", "error");
+    return;
+  }
+
+  setFormStatus("accountStatus", "Saving account...");
+  try {
+    state.accounts.unshift(account);
+    await syncAll();
+    event.currentTarget.reset();
+    setFormStatus("accountStatus", "Account saved.", "success");
+    renderAll();
+  } catch (error) {
+    state.accounts = state.accounts.filter((item) => item.id !== account.id);
+    setFormStatus("accountStatus", error.message || "Failed to save account.", "error");
+  }
+});
+
+document.getElementById("diaryForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const entry = {
+    id: makeId(),
+    title: String(form.get("title")).trim(),
+    body: String(form.get("body")).trim(),
+    createdAt: new Date().toISOString()
+  };
+
+  if (!entry.title || !entry.body) {
+    setFormStatus("diaryStatus", "Title and description are required.", "error");
+    return;
+  }
+
+  setFormStatus("diaryStatus", "Saving entry...");
+  try {
+    state.diaryEntries.unshift(entry);
+    await syncAll();
+    event.currentTarget.reset();
+    setFormStatus("diaryStatus", "Entry saved.", "success");
+    renderAll();
+  } catch (error) {
+    state.diaryEntries = state.diaryEntries.filter((item) => item.id !== entry.id);
+    setFormStatus("diaryStatus", error.message || "Failed to save entry.", "error");
+  }
+});
+
+document.getElementById("listForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const name = String(new FormData(event.currentTarget).get("name")).trim();
+  if (!name) {
+    setFormStatus("listStatus", "List name is required.", "error");
+    return;
+  }
+  const list = { id: makeId(), name, items: [] };
+  setFormStatus("listStatus", "Creating list...");
+  try {
+    state.userLists.push(list);
+    await syncAll();
+    event.currentTarget.reset();
+    setFormStatus("listStatus", "List created.", "success");
+    renderAll();
+  } catch (error) {
+    state.userLists = state.userLists.filter((item) => item.id !== list.id);
+    setFormStatus("listStatus", error.message || "Failed to create list.", "error");
+  }
+});
+
+document.getElementById("reviewForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  const payload = {
+    id: makeId(),
+    name: String(form.get("name")).trim(),
+    email: String(form.get("email") || "").trim(),
+    rating: Number(form.get("rating")),
+    review: String(form.get("review")).trim(),
+    createdAt: new Date().toISOString()
+  };
+
+  if (!payload.name || !payload.review || !payload.rating) {
+    setFormStatus("reviewStatus", "Name, rating, and review are required.", "error");
+    return;
+  }
+
+  setFormStatus("reviewStatus", "Submitting review...");
+
+  try {
+    if (state.mode === "demo") {
+      state.reviews.unshift(payload);
+      await syncAll();
+    } else {
+      await apiRequest(api.reviewSubmit, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: payload.name,
+          email: payload.email,
+          rating: payload.rating,
+          review_text: payload.review
+        })
+      });
+      await loadReviews();
+    }
+
+    event.currentTarget.reset();
+    renderAll();
+    setFormStatus("reviewStatus", "Review submitted.", "success");
+  } catch (error) {
+    setFormStatus("reviewStatus", error.message || "Failed to submit review.", "error");
+  }
+});
+
+document.body.addEventListener("click", async (event) => {
+  const actionButton = event.target.closest(".action-btn");
+  if (!actionButton) return;
+  const { type, action, id } = actionButton.dataset;
+  const item = findCollectionItem(type, id);
+  if (!item) return;
+
+  if (action === "delete") {
+    try {
+      await deleteItem(type, id);
+    } catch (error) {
+      window.alert(error.message || "Delete failed.");
+    }
+    return;
+  }
+
+  if (type === "account") openEditAccount(item);
+  if (type === "diary") openEditDiary(item);
+  if (type === "list") openEditList(item);
+});
+
+document.getElementById("editorClose").addEventListener("click", closeEditor);
+
+editorModal.addEventListener("click", (event) => {
+  if (event.target === editorModal) closeEditor();
+});
+
+document.getElementById("logoutBtn").addEventListener("click", async () => {
+  if (state.mode === "demo") {
+    localStorage.removeItem(demoKeys.user);
+    localStorage.removeItem(demoKeys.enabled);
+    localStorage.removeItem(demoKeys.data);
+    goHome();
+    return;
+  }
+
+  try {
+    await apiRequest(api.logout, { method: "POST" });
+  } finally {
+    goHome();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && editorModal.classList.contains("active")) {
+    closeEditor();
+  }
+});
+
+const bootstrapDemo = () => {
+  const demoUser = getDemoUser();
+  if (!demoUser) {
+    goHome();
+    return;
+  }
+
+  state.mode = "demo";
+  state.user = demoUser;
+  userPill.textContent = `${demoUser.name} | demo mode`;
+  applyPayloadToState(getDemoPayload());
+  renderAll();
+};
+
+const bootstrap = async () => {
+  const demoUser = getDemoUser();
+  if (demoUser) {
+    bootstrapDemo();
+    return;
+  }
+
+  try {
+    const session = await apiRequest(api.me);
+    if (!session.success || !session.user) {
+      goHome();
+      return;
+    }
+    state.user = session.user;
+    userPill.textContent = `${session.user.name} | ${session.user.email}`;
+    await loadData();
+    await loadReviews();
+    renderAll();
+  } catch (_error) {
+    if (getDemoUser()) {
+      bootstrapDemo();
+      return;
+    }
+    goHome();
+  }
+};
+
+bootstrap();

@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hippovault Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body class="dashboard-body">
+  <div class="dashboard-shell">
+    <aside class="dashboard-sidebar">
+      <a class="brand" href="/">
+        <span class="brand-mark">H</span>
+        <span class="brand-copy">
+          <strong>Hippovault</strong>
+          <small>Workspace</small>
+        </span>
+      </a>
+
+      <div class="sidebar-block">
+        <div class="sidebar-label">Navigation</div>
+        <a class="sidebar-link active" href="#overview">Overview</a>
+        <a class="sidebar-link" href="#accounts">Accounts</a>
+        <a class="sidebar-link" href="#diary">Diary</a>
+        <a class="sidebar-link" href="#lists">Lists</a>
+        <a class="sidebar-link" href="#reviews">Reviews</a>
+      </div>
+
+      <div class="sidebar-block">
+        <div class="sidebar-label">Default Lists</div>
+        <div class="sidebar-note">Grocery</div>
+        <div class="sidebar-note">Electric</div>
+        <div class="sidebar-note">Vegetable</div>
+      </div>
+
+    </aside>
+
+    <main class="dashboard-main">
+      <header class="dashboard-topbar">
+        <div>
+          <div class="eyebrow">Private Control Center</div>
+          <h1>Dashboard</h1>
+        </div>
+        <div class="topbar-actions">
+          <div class="user-pill" id="userPill">Loading session...</div>
+          <button class="btn btn-ghost" id="logoutBtn" type="button">Logout</button>
+        </div>
+      </header>
+
+      <section class="dashboard-hero" id="overview">
+        <div class="dashboard-hero-copy">
+          <h2>Manage your secure records with a complete, production-style workspace.</h2>
+          <p>
+            This dashboard centralizes account vault records, diary entries, structured lists, and user reviews in one
+            interface. All sections sync back to the same backend API.
+          </p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#accounts">Add Account</a>
+            <a class="btn btn-ghost" href="#reviews">Write Review</a>
+          </div>
+        </div>
+        <div class="dashboard-hero-panel">
+          <div class="metric-card">
+            <small>Protected Modules</small>
+            <strong>4</strong>
+            <span>Accounts, diary, lists, reviews</span>
+          </div>
+          <div class="metric-card">
+            <small>Sync Model</small>
+            <strong>Live</strong>
+            <span>Writes through the API with session auth</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="stats-grid">
+        <article class="stat-card">
+          <span>Total Accounts</span>
+          <strong id="statAccounts">0</strong>
+        </article>
+        <article class="stat-card">
+          <span>Diary Entries</span>
+          <strong id="statDiary">0</strong>
+        </article>
+        <article class="stat-card">
+          <span>Custom Lists</span>
+          <strong id="statLists">0</strong>
+        </article>
+        <article class="stat-card">
+          <span>Reviews</span>
+          <strong id="statReviews">0</strong>
+        </article>
+      </section>
+
+      <section class="dashboard-section" id="accounts">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Account Lock</div>
+            <h2>Saved account credentials</h2>
+          </div>
+          <div class="section-count" id="accountsCount">0 records</div>
+        </div>
+        <div class="dashboard-layout">
+          <form class="panel-card stack-form" id="accountForm">
+            <h3>Add account</h3>
+            <div class="field">
+              <label for="appName">App name</label>
+              <input id="appName" name="appName" type="text" placeholder="Netflix, GitHub, Banking App" required />
+            </div>
+            <div class="field">
+              <label for="appUrl">URL</label>
+              <input id="appUrl" name="appUrl" type="url" placeholder="https://example.com" required />
+            </div>
+            <div class="field">
+              <label for="username">Username</label>
+              <input id="username" name="username" type="text" placeholder="username or email" required />
+            </div>
+            <div class="field">
+              <label for="password">Password</label>
+              <input id="password" name="password" type="text" placeholder="Secure value" required />
+            </div>
+            <div class="form-status" id="accountStatus" aria-live="polite"></div>
+            <button class="btn btn-primary" type="submit">Save Account</button>
+          </form>
+          <div class="panel-card">
+            <h3>Vault records</h3>
+            <div class="record-grid" id="accountsList"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="dashboard-section" id="diary">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Digital Diary</div>
+            <h2>Private Diary</h2>
+          </div>
+          <div class="section-count" id="diaryCount">0 entries</div>
+        </div>
+        <div class="dashboard-layout">
+          <form class="panel-card stack-form" id="diaryForm">
+            <h3>New entry</h3>
+            <div class="field">
+              <label for="diaryTitle">Title</label>
+              <input id="diaryTitle" name="title" type="text" placeholder="Entry title" required />
+            </div>
+            <div class="field">
+              <label for="diaryBody">Description</label>
+              <textarea id="diaryBody" name="body" placeholder="Write your note..." required></textarea>
+            </div>
+            <div class="form-status" id="diaryStatus" aria-live="polite"></div>
+            <button class="btn btn-primary" type="submit">Save Entry</button>
+          </form>
+          <div class="panel-card">
+            <h3>Recent entries</h3>
+            <div class="record-grid" id="diaryList"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="dashboard-section" id="lists">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Perfect Lists</div>
+            <h2>Default essentials and custom collections</h2>
+          </div>
+          <div class="section-count" id="listsCount">0 custom lists</div>
+        </div>
+        <div class="dashboard-layout">
+          <form class="panel-card stack-form" id="listForm">
+            <h3>Create custom list</h3>
+            <div class="field">
+              <label for="listName">List name</label>
+              <input id="listName" name="name" type="text" placeholder="Travel checklist, Weekly goals" required />
+            </div>
+            <div class="form-status" id="listStatus" aria-live="polite"></div>
+            <button class="btn btn-primary" type="submit">Create List</button>
+          </form>
+          <div class="panel-card">
+            <h3>List library</h3>
+            <div class="lists-wrapper">
+              <div>
+                <div class="subheading">Default lists</div>
+                <div class="record-grid" id="defaultLists"></div>
+              </div>
+              <div>
+                <div class="subheading">Custom lists</div>
+                <div class="record-grid" id="customLists"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="dashboard-section" id="reviews">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Reviews</div>
+            <h2>Capture feedback inside the workspace</h2>
+          </div>
+          <div class="section-count" id="reviewsCount">0 reviews</div>
+        </div>
+        <div class="dashboard-layout">
+          <form class="panel-card stack-form" id="reviewForm">
+            <h3>Share a review</h3>
+            <div class="field">
+              <label for="reviewName">Name</label>
+              <input id="reviewName" name="name" type="text" placeholder="Your name" required />
+            </div>
+            <div class="field">
+              <label for="reviewEmail">Email</label>
+              <input id="reviewEmail" name="email" type="email" placeholder="Optional email" />
+            </div>
+            <div class="field">
+              <label for="reviewRating">Rating</label>
+              <select id="reviewRating" name="rating" required>
+                <option value="">Select rating</option>
+                <option value="5">5 - Excellent</option>
+                <option value="4">4 - Very good</option>
+                <option value="3">3 - Good</option>
+                <option value="2">2 - Needs work</option>
+                <option value="1">1 - Poor</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="reviewText">Review</label>
+              <textarea id="reviewText" name="review" placeholder="Share your experience..." required></textarea>
+            </div>
+            <div class="form-status" id="reviewStatus" aria-live="polite"></div>
+            <button class="btn btn-primary" type="submit">Submit Review</button>
+          </form>
+          <div class="panel-card">
+            <h3>Saved reviews</h3>
+            <div class="record-grid" id="reviewList"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal-shell" id="editorModal" aria-hidden="true">
+    <div class="modal-card editor-card" role="dialog" aria-modal="true" aria-labelledby="editorTitle">
+      <button class="modal-close" id="editorClose" type="button" aria-label="Close editor">&times;</button>
+      <div class="eyebrow">Workspace Editor</div>
+      <h2 id="editorTitle">Edit Item</h2>
+      <div id="editorBody"></div>
+    </div>
+  </div>
+
+  <script src="/dashboard.js"></script>
+</body>
+</html>
