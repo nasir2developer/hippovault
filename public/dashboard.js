@@ -4,6 +4,7 @@ const api = {
   me: `${apiBase}/api/auth/me`,
   logout: `${apiBase}/api/auth/logout`,
   data: `${apiBase}/api/data`,
+  export: `${apiBase}/api/export`,
   reviews: `${apiBase}/get-reviews`,
   reviewSubmit: `${apiBase}/submit-review`
 };
@@ -31,13 +32,27 @@ const state = {
   userLists: [],
   defaultLists: defaultListSeed.map((item) => ({ ...item })),
   reviews: [],
-  mode: "api"
+  mode: "api",
+  filters: {
+    accounts: "",
+    diary: "",
+    reviews: ""
+  },
+  lastSyncedAt: null
 };
 
 const userPill = document.getElementById("userPill");
 const editorModal = document.getElementById("editorModal");
 const editorBody = document.getElementById("editorBody");
 const editorTitle = document.getElementById("editorTitle");
+const syncStatus = document.getElementById("syncStatus");
+const syncDetail = document.getElementById("syncDetail");
+const securityScore = document.getElementById("securityScore");
+const securityDetail = document.getElementById("securityDetail");
+const exportBtn = document.getElementById("exportBtn");
+const accountSearch = document.getElementById("accountSearch");
+const diarySearch = document.getElementById("diarySearch");
+const reviewSearch = document.getElementById("reviewSearch");
 
 const setFormStatus = (id, message, type = "") => {
   const node = document.getElementById(id);
@@ -65,6 +80,43 @@ const formatDate = (value) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Unknown date";
   return date.toLocaleString();
+};
+
+const normalizeText = (value) => String(value || "").trim().toLowerCase();
+
+const matchesFilter = (fields, query) => {
+  const needle = normalizeText(query);
+  if (!needle) return true;
+  return fields.some((field) => normalizeText(field).includes(needle));
+};
+
+const setSyncState = (title, detail) => {
+  syncStatus.textContent = title;
+  syncDetail.textContent = detail;
+};
+
+const updateSecuritySummary = () => {
+  const modeLabel = state.mode === "demo" ? "Demo Sandbox" : "Protected";
+  const securityParts = [
+    state.mode === "demo" ? "Local demo data only" : "Encrypted server storage",
+    window.location.protocol === "https:" ? "HTTPS transport" : "non-HTTPS environment",
+    `${state.accounts.length} accounts`,
+    `${state.diaryEntries.length} diary entries`
+  ];
+  securityScore.textContent = modeLabel;
+  securityDetail.textContent = securityParts.join(" | ");
+};
+
+const downloadJsonFile = (fileName, payload) => {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 };
 
 const parseJsonSafe = async (response) => {
@@ -181,15 +233,20 @@ const renderStats = () => {
   document.getElementById("diaryCount").textContent = `${state.diaryEntries.length} entries`;
   document.getElementById("listsCount").textContent = `${state.userLists.length} custom lists`;
   document.getElementById("reviewsCount").textContent = `${state.reviews.length} reviews`;
+  updateSecuritySummary();
 };
 
 const renderAccounts = () => {
   const container = document.getElementById("accountsList");
-  if (!state.accounts.length) {
+  const visibleAccounts = state.accounts.filter((account) => matchesFilter(
+    [account.appName, account.appUrl, account.username, account.password],
+    state.filters.accounts
+  ));
+  if (!visibleAccounts.length) {
     container.innerHTML = `<article class="empty-card">No account records yet.</article>`;
     return;
   }
-  container.innerHTML = state.accounts.map((account) => `
+  container.innerHTML = visibleAccounts.map((account) => `
     <article class="record-card">
       <div class="record-head">
         <div>
@@ -210,11 +267,15 @@ const renderAccounts = () => {
 
 const renderDiary = () => {
   const container = document.getElementById("diaryList");
-  if (!state.diaryEntries.length) {
+  const visibleEntries = state.diaryEntries.filter((entry) => matchesFilter(
+    [entry.title, entry.body, formatDate(entry.createdAt)],
+    state.filters.diary
+  ));
+  if (!visibleEntries.length) {
     container.innerHTML = `<article class="empty-card">No diary entries yet.</article>`;
     return;
   }
-  container.innerHTML = state.diaryEntries.map((entry) => `
+  container.innerHTML = visibleEntries.map((entry) => `
     <article class="record-card">
       <div class="record-head">
         <div>
@@ -263,11 +324,15 @@ const renderLists = () => {
 
 const renderReviews = () => {
   const container = document.getElementById("reviewList");
-  if (!state.reviews.length) {
+  const visibleReviews = state.reviews.filter((review) => matchesFilter(
+    [review.name, review.email, review.review, formatDate(review.createdAt)],
+    state.filters.reviews
+  ));
+  if (!visibleReviews.length) {
     container.innerHTML = `<article class="empty-card">No reviews saved yet.</article>`;
     return;
   }
-  container.innerHTML = state.reviews.map((review) => `
+  container.innerHTML = visibleReviews.map((review) => `
     <article class="record-card">
       <div class="record-head">
         <div>
@@ -293,6 +358,8 @@ const renderAll = () => {
 const syncAll = async () => {
   if (state.mode === "demo") {
     saveDemoPayload();
+    state.lastSyncedAt = new Date().toISOString();
+    setSyncState("Local", `Demo vault updated ${formatDate(state.lastSyncedAt)}`);
     return;
   }
   await apiRequest(api.data, {
@@ -305,6 +372,8 @@ const syncAll = async () => {
       defaultLists: state.defaultLists
     })
   });
+  state.lastSyncedAt = new Date().toISOString();
+  setSyncState("Live", `Secure cloud sync completed ${formatDate(state.lastSyncedAt)}`);
 };
 
 const loadData = async () => {
@@ -319,6 +388,8 @@ const loadData = async () => {
   }
 
   applyPayloadToState(payload.data);
+  state.lastSyncedAt = new Date().toISOString();
+  setSyncState("Live", `Workspace loaded ${formatDate(state.lastSyncedAt)}`);
 };
 
 const loadReviews = async () => {
@@ -604,6 +675,8 @@ document.getElementById("reviewForm").addEventListener("submit", async (event) =
         })
       });
       await loadReviews();
+      state.lastSyncedAt = new Date().toISOString();
+      setSyncState("Live", `Review sync completed ${formatDate(state.lastSyncedAt)}`);
     }
 
     event.currentTarget.reset();
@@ -612,6 +685,21 @@ document.getElementById("reviewForm").addEventListener("submit", async (event) =
   } catch (error) {
     setFormStatus("reviewStatus", error.message || "Failed to submit review.", "error");
   }
+});
+
+accountSearch.addEventListener("input", (event) => {
+  state.filters.accounts = event.target.value;
+  renderAccounts();
+});
+
+diarySearch.addEventListener("input", (event) => {
+  state.filters.diary = event.target.value;
+  renderDiary();
+});
+
+reviewSearch.addEventListener("input", (event) => {
+  state.filters.reviews = event.target.value;
+  renderReviews();
 });
 
 document.body.addEventListener("click", async (event) => {
@@ -657,6 +745,35 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
   }
 });
 
+exportBtn.addEventListener("click", async () => {
+  exportBtn.disabled = true;
+  exportBtn.textContent = "Exporting...";
+  try {
+    if (state.mode === "demo") {
+      downloadJsonFile("hippovault-demo-export.json", {
+        exportedAt: new Date().toISOString(),
+        user: state.user,
+        data: {
+          accounts: state.accounts,
+          diaryEntries: state.diaryEntries,
+          userLists: state.userLists,
+          defaultLists: state.defaultLists
+        },
+        reviews: state.reviews
+      });
+    } else {
+      const payload = await apiRequest(api.export);
+      downloadJsonFile("hippovault-export.json", payload);
+    }
+    setSyncState(syncStatus.textContent, "Encrypted workspace export downloaded");
+  } catch (error) {
+    window.alert(error.message || "Export failed.");
+  } finally {
+    exportBtn.disabled = false;
+    exportBtn.textContent = "Export Data";
+  }
+});
+
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && editorModal.classList.contains("active")) {
     closeEditor();
@@ -674,6 +791,9 @@ const bootstrapDemo = () => {
   state.user = demoUser;
   userPill.textContent = `${demoUser.name} | demo mode`;
   applyPayloadToState(getDemoPayload());
+  document.getElementById("reviewName").value = demoUser.name || "";
+  document.getElementById("reviewEmail").value = demoUser.email || "";
+  setSyncState("Local", "Demo workspace loaded in browser storage");
   renderAll();
 };
 
@@ -692,6 +812,8 @@ const bootstrap = async () => {
     }
     state.user = session.user;
     userPill.textContent = `${session.user.name} | ${session.user.email}`;
+    document.getElementById("reviewName").value = session.user.name || "";
+    document.getElementById("reviewEmail").value = session.user.email || "";
     await loadData();
     await loadReviews();
     renderAll();

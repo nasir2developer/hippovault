@@ -12,8 +12,17 @@ const app = express();
 const port = Number(process.env.PORT || 3000);
 const isProduction = process.env.NODE_ENV === "production";
 const publicDir = path.join(__dirname, "public");
+const JSON_LIMIT = "200kb";
+const AUTH_WINDOW_MS = 15 * 60 * 1000;
+const AUTH_MAX_ATTEMPTS = 10;
+const API_WINDOW_MS = 60 * 1000;
+const API_MAX_REQUESTS = 240;
+const STATIC_ASSET_PATTERN = /\.(?:css|js|png|jpg|jpeg|gif|svg|webp|ico|woff2?)$/i;
+const authRateBucket = new Map();
+const apiRateBucket = new Map();
 
 app.set("trust proxy", 1);
+app.disable("x-powered-by");
 
 const normalizeEnvValue = (value) => String(value || "").trim().replace(/^"(.*)"$/, "$1");
 
@@ -32,6 +41,8 @@ const getRequiredEnv = (names, message) => {
   }
   return value;
 };
+
+const appUrl = getEnv("APP_URL", "PUBLIC_APP_URL", "hippovault_APP_URL");
 
 const databaseUrl = getRequiredEnv(
   ["DATABASE_URL", "hippovault_POSTGRES_URL", "hippovault_POSTGRES_URL_NON_POOLING"],
@@ -74,6 +85,223 @@ const parseOrigins = () => {
 };
 
 const allowedOrigins = parseOrigins();
+
+const buildCsp = () => {
+  const connectSources = ["'self'"];
+  if (appUrl) {
+    try {
+      connectSources.push(new URL(appUrl).origin);
+    } catch (_error) {
+      // Ignore invalid APP_URL values and keep the CSP self-only.
+    }
+  }
+
+  return [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    "img-src 'self' data:",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    `connect-src ${[...new Set(connectSources)].join(" ")}`,
+    "object-src 'none'",
+    "upgrade-insecure-requests"
+  ].join("; ");
+};
+
+const setSecurityHeaders = (req, res, next) => {
+  res.setHeader("Content-Security-Policy", buildCsp());
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  res.setHeader("Origin-Agent-Cluster", "?1");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), browsing-topics=()");
+  if (isProduction) {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+  }
+  if (req.path.startsWith("/api/") || req.path === "/submit-review" || req.path === "/get-reviews" || req.path === "/health") {
+    res.setHeader("Cache-Control", "no-store");
+  } else if (STATIC_ASSET_PATTERN.test(req.path)) {
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  } else {
+    res.setHeader("Cache-Control", "no-store");
+  }
+  next();
+};
+
+const sweepRateBucket = (bucket, now, windowMs) => {
+  for (const [key, entry] of bucket.entries()) {
+    if (now - entry.startedAt >= windowMs) {
+      bucket.delete(key);
+    }
+  }
+};
+
+const getClientIp = (req) => req.ip || req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown";
+
+const createRateLimiter = ({ bucket, windowMs, maxRequests, keyPrefix }) => (req, res, next) => {
+  const now = Date.now();
+  sweepRateBucket(bucket, now, windowMs);
+  const key = `${keyPrefix}:${getClientIp(req)}`;
+  const current = bucket.get(key);
+  if (!current || now - current.startedAt >= windowMs) {
+    bucket.set(key, { startedAt: now, count: 1 });
+    return next();
+  }
+  if (current.count >= maxRequests) {
+    const retryAfter = Math.max(1, Math.ceil((windowMs - (now - current.startedAt)) / 1000));
+    res.setHeader("Retry-After", String(retryAfter));
+    return res.status(429).json({ success: false, message: "Too many requests. Please try again shortly." });
+  }
+  current.count += 1;
+  return next();
+};
+
+const authLimiter = createRateLimiter({
+  bucket: authRateBucket,
+  windowMs: AUTH_WINDOW_MS,
+  maxRequests: AUTH_MAX_ATTEMPTS,
+  keyPrefix: "auth"
+});
+
+const apiLimiter = createRateLimiter({
+  bucket: apiRateBucket,
+  windowMs: API_WINDOW_MS,
+  maxRequests: API_MAX_REQUESTS,
+  keyPrefix: "api"
+});
+
+const limitString = (value, maxLength) => String(value || "").trim().slice(0, maxLength);
+const normalizeEmail = (value) => limitString(value, 255).toLowerCase();
+const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+const isValidPassword = (value) => typeof value === "string" && value.length >= 8 && value.length <= 128;
+const normalizeOptionalEmail = (value) => {
+  const email = normalizeEmail(value);
+  return email ? email : null;
+};
+
+const normalizeAppUrl = (value) => {
+  const raw = limitString(value, 2048);
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    if (!["http:", "https:"].includes(parsed.protocol)) return "";
+    return parsed.toString();
+  } catch (_error) {
+    return "";
+  }
+};
+
+const validateReviewRating = (value) => {
+  const rating = Number(value);
+  return Number.isInteger(rating) && rating >= 1 && rating <= 5 ? rating : null;
+};
+
+const dedupeById = (items) => {
+  const seen = new Set();
+  const output = [];
+  for (const item of items) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    output.push(item);
+  }
+  return output;
+};
+
+const makeId = () => `id-${Date.now()}-${Math.floor(Math.random() * 100000)}-${crypto.randomBytes(4).toString("hex")}`;
+
+const defaultListSeed = [
+  { id: "default-grocery", name: "Grocery List", locked: true, isDefault: true },
+  { id: "default-electric", name: "Electric List", locked: true, isDefault: true },
+  { id: "default-vegetable", name: "Vegetable List", locked: true, isDefault: true }
+];
+
+const normalizeListItems = (items) => dedupeById(
+  (Array.isArray(items) ? items : [])
+    .slice(0, 100)
+    .map((item) => ({
+      id: limitString(item?.id || makeId(), 120),
+      itemName: limitString(item?.itemName, 400)
+    }))
+    .filter((item) => item.itemName)
+);
+
+const normalizePersistedPayload = (body) => {
+  const accounts = dedupeById(
+    (Array.isArray(body?.accounts) ? body.accounts : [])
+      .slice(0, 250)
+      .map((account) => ({
+        id: limitString(account?.id || makeId(), 120),
+        appName: limitString(account?.appName, 180),
+        appUrl: normalizeAppUrl(account?.appUrl),
+        username: limitString(account?.username, 180),
+        password: limitString(account?.password, 500),
+        createdAt: account?.createdAt || new Date().toISOString()
+      }))
+      .filter((account) => account.appName && account.appUrl && account.username && account.password)
+  );
+
+  const diaryEntries = dedupeById(
+    (Array.isArray(body?.diaryEntries) ? body.diaryEntries : [])
+      .slice(0, 500)
+      .map((entry) => ({
+        id: limitString(entry?.id || makeId(), 120),
+        title: limitString(entry?.title, 220),
+        body: limitString(entry?.body, 8000),
+        createdAt: entry?.createdAt || new Date().toISOString()
+      }))
+      .filter((entry) => entry.title && entry.body)
+  );
+
+  const defaultItemsById = new Map(
+    (Array.isArray(body?.defaultLists) ? body.defaultLists : [])
+      .map((list) => [String(list?.id || ""), list])
+  );
+
+  const defaultLists = defaultListSeed.map((seed) => {
+    const incoming = defaultItemsById.get(seed.id);
+    return {
+      id: seed.id,
+      name: seed.name,
+      locked: true,
+      isDefault: true,
+      items: normalizeListItems(incoming?.items)
+    };
+  });
+
+  const userLists = dedupeById(
+    (Array.isArray(body?.userLists) ? body.userLists : [])
+      .slice(0, 100)
+      .map((list) => ({
+        id: limitString(list?.id || makeId(), 120),
+        name: limitString(list?.name, 220),
+        locked: false,
+        items: normalizeListItems(list?.items)
+      }))
+      .filter((list) => list.id && list.name && !list.id.startsWith("default-"))
+  );
+
+  return { accounts, diaryEntries, defaultLists, userLists };
+};
+
+const rotateSession = (req, user, res, callback) => {
+  req.session.regenerate((sessionError) => {
+    if (sessionError) {
+      console.error("session regenerate error:", sessionError);
+      return res.status(500).json({ success: false, message: "Failed to establish session." });
+    }
+    req.session.userId = user.id;
+    req.session.userEmail = user.email;
+    req.session.userName = user.name;
+    return callback();
+  });
+};
+
+app.use(setSecurityHeaders);
 app.use(cors({
   origin(origin, callback) {
     if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
@@ -82,7 +310,7 @@ app.use(cors({
   credentials: true
 }));
 
-app.use(express.json());
+app.use(express.json({ limit: JSON_LIMIT }));
 app.use((err, _req, res, next) => {
   if (err instanceof SyntaxError && "body" in err) {
     return res.status(400).json({ success: false, message: "Invalid JSON body." });
@@ -91,6 +319,7 @@ app.use((err, _req, res, next) => {
 });
 
 app.use(session({
+  name: "hippovault.sid",
   store: new pgSession({
     pool,
     tableName: "user_sessions",
@@ -99,14 +328,16 @@ app.use(session({
   secret: sessionSecret,
   resave: false,
   saveUninitialized: false,
+  rolling: true,
   cookie: {
     httpOnly: true,
     sameSite: "lax",
     secure: isProduction,
-    maxAge: 1000 * 60 * 60 * 24
+    maxAge: 1000 * 60 * 60 * 12
   }
 }));
 
+app.use(apiLimiter);
 app.use(express.static(publicDir));
 
 const encryptText = (value) => {
@@ -132,21 +363,12 @@ const decryptText = (value) => {
   }
 };
 
-const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
 const requireAuth = (req, res, next) => {
   if (!req.session.userId) {
     return res.status(401).json({ success: false, message: "Unauthorized." });
   }
   return next();
 };
-
-const makeId = () => `id-${Date.now()}-${Math.floor(Math.random() * 100000)}-${crypto.randomBytes(4).toString("hex")}`;
-
-const defaultListSeed = [
-  { id: "default-grocery", name: "Grocery List", locked: true, isDefault: true },
-  { id: "default-electric", name: "Electric List", locked: true, isDefault: true },
-  { id: "default-vegetable", name: "Vegetable List", locked: true, isDefault: true }
-];
 
 const ensureDefaultLists = async (userId) => {
   const existing = await pool.query("SELECT id FROM lists WHERE user_id = $1 AND is_default = TRUE", [userId]);
@@ -160,17 +382,75 @@ const ensureDefaultLists = async (userId) => {
   }
 };
 
-app.post("/api/auth/signup", async (req, res) => {
+const loadUserData = async (userId) => {
+  await ensureDefaultLists(userId);
+  const [accountsRes, diaryRes, listsRes, itemsRes] = await Promise.all([
+    pool.query("SELECT id, app_name, app_url, username, password_encrypted, created_at FROM user_accounts WHERE user_id = $1 ORDER BY created_at DESC", [userId]),
+    pool.query("SELECT id, title, body, created_at FROM diary_entries WHERE user_id = $1 ORDER BY created_at DESC", [userId]),
+    pool.query("SELECT id, name, locked, is_default, created_at FROM lists WHERE user_id = $1 ORDER BY created_at ASC", [userId]),
+    pool.query("SELECT id, list_id, item_name FROM list_items WHERE user_id = $1 ORDER BY created_at ASC", [userId])
+  ]);
+
+  const itemsByList = new Map();
+  for (const row of itemsRes.rows) {
+    const collection = itemsByList.get(row.list_id) || [];
+    collection.push({ id: row.id, itemName: row.item_name });
+    itemsByList.set(row.list_id, collection);
+  }
+
+  const accounts = accountsRes.rows.map((row) => ({
+    id: row.id,
+    appName: row.app_name,
+    appUrl: row.app_url,
+    username: row.username,
+    password: decryptText(row.password_encrypted),
+    createdAt: row.created_at
+  }));
+
+  const diaryEntries = diaryRes.rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    body: row.body,
+    createdAt: row.created_at
+  }));
+
+  const allLists = listsRes.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    locked: row.locked,
+    items: itemsByList.get(row.id) || []
+  }));
+
+  return {
+    accounts,
+    diaryEntries,
+    userLists: allLists.filter((list) => !list.id.startsWith("default-")),
+    defaultLists: allLists.filter((list) => list.id.startsWith("default-"))
+  };
+};
+
+const loadUserReviews = async (userId) => {
+  const result = await pool.query(
+    "SELECT id, name, email, rating, review_text, created_at FROM reviews WHERE user_id = $1 ORDER BY created_at DESC",
+    [userId]
+  );
+  return result.rows;
+};
+
+app.post("/api/auth/signup", authLimiter, async (req, res) => {
   try {
-    const name = String(req.body?.name || "").trim();
+    const name = limitString(req.body?.name, 120);
     const email = normalizeEmail(req.body?.email);
     const password = String(req.body?.password || "");
 
     if (!name || !email || !password) {
       return res.status(400).json({ success: false, message: "Name, email, and password are required." });
     }
-    if (password.length < 8) {
-      return res.status(400).json({ success: false, message: "Password must be at least 8 characters." });
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ success: false, message: "Enter a valid email address." });
+    }
+    if (!isValidPassword(password)) {
+      return res.status(400).json({ success: false, message: "Password must be between 8 and 128 characters." });
     }
 
     const hash = await bcrypt.hash(password, 12);
@@ -180,9 +460,7 @@ app.post("/api/auth/signup", async (req, res) => {
     );
     const user = insert.rows[0];
     await ensureDefaultLists(user.id);
-    req.session.userId = user.id;
-    req.session.userEmail = user.email;
-    return res.json({ success: true, user });
+    return rotateSession(req, user, res, () => res.json({ success: true, user }));
   } catch (error) {
     if (error.code === "23505") {
       return res.status(409).json({ success: false, message: "Email is already registered." });
@@ -192,7 +470,7 @@ app.post("/api/auth/signup", async (req, res) => {
   }
 });
 
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", authLimiter, async (req, res) => {
   try {
     const email = normalizeEmail(req.body?.email);
     const password = String(req.body?.password || "");
@@ -215,9 +493,10 @@ app.post("/api/auth/login", async (req, res) => {
     }
 
     await ensureDefaultLists(user.id);
-    req.session.userId = user.id;
-    req.session.userEmail = user.email;
-    return res.json({ success: true, user: { id: user.id, name: user.name, email: user.email } });
+    return rotateSession(req, user, res, () => res.json({
+      success: true,
+      user: { id: user.id, name: user.name, email: user.email }
+    }));
   } catch (error) {
     console.error("login error:", error);
     return res.status(500).json({ success: false, message: "Failed to login." });
@@ -226,7 +505,7 @@ app.post("/api/auth/login", async (req, res) => {
 
 app.post("/api/auth/logout", (req, res) => {
   req.session.destroy(() => {
-    res.clearCookie("connect.sid");
+    res.clearCookie("hippovault.sid");
     res.json({ success: true });
   });
 });
@@ -247,48 +526,8 @@ app.get("/api/auth/me", async (req, res) => {
 app.get("/api/data", requireAuth, async (req, res) => {
   const userId = req.session.userId;
   try {
-    await ensureDefaultLists(userId);
-    const [accountsRes, diaryRes, listsRes, itemsRes] = await Promise.all([
-      pool.query("SELECT id, app_name, app_url, username, password_encrypted, created_at FROM user_accounts WHERE user_id = $1 ORDER BY created_at DESC", [userId]),
-      pool.query("SELECT id, title, body, created_at FROM diary_entries WHERE user_id = $1 ORDER BY created_at DESC", [userId]),
-      pool.query("SELECT id, name, locked, is_default, created_at FROM lists WHERE user_id = $1 ORDER BY created_at ASC", [userId]),
-      pool.query("SELECT id, list_id, item_name FROM list_items WHERE user_id = $1 ORDER BY created_at ASC", [userId])
-    ]);
-
-    const itemsByList = new Map();
-    for (const row of itemsRes.rows) {
-      const collection = itemsByList.get(row.list_id) || [];
-      collection.push({ id: row.id, itemName: row.item_name });
-      itemsByList.set(row.list_id, collection);
-    }
-
-    const accounts = accountsRes.rows.map((row) => ({
-      id: row.id,
-      appName: row.app_name,
-      appUrl: row.app_url,
-      username: row.username,
-      password: decryptText(row.password_encrypted),
-      createdAt: row.created_at
-    }));
-
-    const diaryEntries = diaryRes.rows.map((row) => ({
-      id: row.id,
-      title: row.title,
-      body: row.body,
-      createdAt: row.created_at
-    }));
-
-    const allLists = listsRes.rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      locked: row.locked,
-      items: itemsByList.get(row.id) || []
-    }));
-
-    const defaultLists = allLists.filter((list) => list.id.startsWith("default-"));
-    const userLists = allLists.filter((list) => !list.id.startsWith("default-"));
-
-    return res.json({ success: true, data: { accounts, diaryEntries, userLists, defaultLists } });
+    const data = await loadUserData(userId);
+    return res.json({ success: true, data });
   } catch (error) {
     console.error("get data error:", error);
     return res.status(500).json({ success: false, message: "Failed to load user data." });
@@ -297,10 +536,7 @@ app.get("/api/data", requireAuth, async (req, res) => {
 
 app.put("/api/data", requireAuth, async (req, res) => {
   const userId = req.session.userId;
-  const accounts = Array.isArray(req.body?.accounts) ? req.body.accounts : [];
-  const diaryEntries = Array.isArray(req.body?.diaryEntries) ? req.body.diaryEntries : [];
-  const userLists = Array.isArray(req.body?.userLists) ? req.body.userLists : [];
-  const defaultLists = Array.isArray(req.body?.defaultLists) ? req.body.defaultLists : [];
+  const { accounts, diaryEntries, userLists, defaultLists } = normalizePersistedPayload(req.body);
 
   const allLists = [...defaultLists, ...userLists];
 
@@ -365,14 +601,17 @@ app.put("/api/data", requireAuth, async (req, res) => {
 
 app.post("/submit-review", requireAuth, async (req, res) => {
   try {
-    const name = String(req.body?.name || "").trim();
-    const email = normalizeEmail(req.body?.email) || null;
-    const rating = Number(req.body?.rating);
-    const reviewText = String(req.body?.review_text || "").trim();
+    const name = limitString(req.body?.name, 120);
+    const email = normalizeOptionalEmail(req.body?.email);
+    const rating = validateReviewRating(req.body?.rating);
+    const reviewText = limitString(req.body?.review_text, 4000);
     if (!name || !reviewText) {
       return res.status(400).json({ success: false, message: "Name and review text are required." });
     }
-    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    if (email && !isValidEmail(email)) {
+      return res.status(400).json({ success: false, message: "Email format is invalid." });
+    }
+    if (!rating) {
       return res.status(400).json({ success: false, message: "Rating must be an integer between 1 and 5." });
     }
     const id = makeId();
@@ -389,11 +628,8 @@ app.post("/submit-review", requireAuth, async (req, res) => {
 
 app.get("/get-reviews", requireAuth, async (req, res) => {
   try {
-    const result = await pool.query(
-      "SELECT id, name, email, rating, review_text, created_at FROM reviews WHERE user_id = $1 ORDER BY created_at DESC",
-      [req.session.userId]
-    );
-    return res.json({ success: true, reviews: result.rows });
+    const reviews = await loadUserReviews(req.session.userId);
+    return res.json({ success: true, reviews });
   } catch (error) {
     console.error("get-reviews error:", error);
     return res.status(500).json({ success: false, message: "Internal server error while loading reviews." });
@@ -402,6 +638,37 @@ app.get("/get-reviews", requireAuth, async (req, res) => {
 
 app.get("/health", (_req, res) => {
   res.json({ success: true, message: "Secure API is running." });
+});
+
+app.get("/api/export", requireAuth, async (req, res) => {
+  try {
+    const userResult = await pool.query("SELECT id, name, email, created_at FROM users WHERE id = $1", [req.session.userId]);
+    const user = userResult.rows[0];
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found." });
+    }
+
+    const [data, reviews] = await Promise.all([
+      loadUserData(req.session.userId),
+      loadUserReviews(req.session.userId)
+    ]);
+
+    return res.json({
+      success: true,
+      exportedAt: new Date().toISOString(),
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        createdAt: user.created_at
+      },
+      data,
+      reviews
+    });
+  } catch (error) {
+    console.error("export error:", error);
+    return res.status(500).json({ success: false, message: "Failed to export data." });
+  }
 });
 
 app.get("/", (_req, res) => {

@@ -46,6 +46,7 @@
         </div>
         <div class="topbar-actions">
           <div class="user-pill" id="userPill">Loading session...</div>
+          <button class="btn btn-ghost" id="exportBtn" type="button">Export Data</button>
           <button class="btn btn-ghost" id="logoutBtn" type="button">Logout</button>
         </div>
       </header>
@@ -70,8 +71,13 @@
           </div>
           <div class="metric-card">
             <small>Sync Model</small>
-            <strong>Live</strong>
-            <span>Writes through the API with session auth</span>
+            <strong id="syncStatus">Starting</strong>
+            <span id="syncDetail">Preparing secure workspace state</span>
+          </div>
+          <div class="metric-card">
+            <small>Security Posture</small>
+            <strong id="securityScore">Protected</strong>
+            <span id="securityDetail">Per-user encrypted records with session-backed access</span>
           </div>
         </div>
       </section>
@@ -125,9 +131,12 @@
             <div class="form-status" id="accountStatus" aria-live="polite"></div>
             <button class="btn btn-primary" type="submit">Save Account</button>
           </form>
-          <div class="panel-card">
-            <h3>Vault records</h3>
-            <div class="record-grid" id="accountsList"></div>
+          <div class="panel-card panel-scroll-card">
+            <div class="panel-toolbar">
+              <h3>Vault records</h3>
+              <input id="accountSearch" type="search" placeholder="Search accounts" autocomplete="off" />
+            </div>
+            <div class="record-grid record-scroll-area" id="accountsList"></div>
           </div>
         </div>
       </section>
@@ -154,9 +163,12 @@
             <div class="form-status" id="diaryStatus" aria-live="polite"></div>
             <button class="btn btn-primary" type="submit">Save Entry</button>
           </form>
-          <div class="panel-card">
-            <h3>Recent entries</h3>
-            <div class="record-grid" id="diaryList"></div>
+          <div class="panel-card panel-scroll-card">
+            <div class="panel-toolbar">
+              <h3>Recent entries</h3>
+              <input id="diarySearch" type="search" placeholder="Search diary entries" autocomplete="off" />
+            </div>
+            <div class="record-grid record-scroll-area" id="diaryList"></div>
           </div>
         </div>
       </section>
@@ -179,14 +191,14 @@
             <div class="form-status" id="listStatus" aria-live="polite"></div>
             <button class="btn btn-primary" type="submit">Create List</button>
           </form>
-          <div class="panel-card">
+          <div class="panel-card panel-scroll-card">
             <h3>List library</h3>
-            <div class="lists-wrapper">
-              <div>
+            <div class="lists-wrapper lists-scroll-area">
+              <div class="list-column">
                 <div class="subheading">Default lists</div>
                 <div class="record-grid" id="defaultLists"></div>
               </div>
-              <div>
+              <div class="list-column">
                 <div class="subheading">Custom lists</div>
                 <div class="record-grid" id="customLists"></div>
               </div>
@@ -232,9 +244,12 @@
             <div class="form-status" id="reviewStatus" aria-live="polite"></div>
             <button class="btn btn-primary" type="submit">Submit Review</button>
           </form>
-          <div class="panel-card">
-            <h3>Saved reviews</h3>
-            <div class="record-grid" id="reviewList"></div>
+          <div class="panel-card panel-scroll-card">
+            <div class="panel-toolbar">
+              <h3>Saved reviews</h3>
+              <input id="reviewSearch" type="search" placeholder="Search reviews" autocomplete="off" />
+            </div>
+            <div class="record-grid record-scroll-area" id="reviewList"></div>
           </div>
         </div>
       </section>
