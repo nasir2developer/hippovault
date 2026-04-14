@@ -599,7 +599,7 @@ app.put("/api/data", requireAuth, async (req, res) => {
   }
 });
 
-app.post("/submit-review", requireAuth, async (req, res) => {
+const handleSubmitReview = async (req, res) => {
   try {
     const name = limitString(req.body?.name, 120);
     const email = normalizeOptionalEmail(req.body?.email);
@@ -624,9 +624,9 @@ app.post("/submit-review", requireAuth, async (req, res) => {
     console.error("submit-review error:", error);
     return res.status(500).json({ success: false, message: "Internal server error while saving review." });
   }
-});
+};
 
-app.get("/get-reviews", requireAuth, async (req, res) => {
+const handleGetReviews = async (req, res) => {
   try {
     const reviews = await loadUserReviews(req.session.userId);
     return res.json({ success: true, reviews });
@@ -634,11 +634,18 @@ app.get("/get-reviews", requireAuth, async (req, res) => {
     console.error("get-reviews error:", error);
     return res.status(500).json({ success: false, message: "Internal server error while loading reviews." });
   }
-});
+};
 
-app.get("/health", (_req, res) => {
+const handleHealth = (_req, res) => {
   res.json({ success: true, message: "Secure API is running." });
-});
+};
+
+app.post("/api/reviews", requireAuth, handleSubmitReview);
+app.get("/api/reviews", requireAuth, handleGetReviews);
+app.post("/submit-review", requireAuth, handleSubmitReview);
+app.get("/get-reviews", requireAuth, handleGetReviews);
+app.get("/api/health", handleHealth);
+app.get("/health", handleHealth);
 
 app.get("/api/export", requireAuth, async (req, res) => {
   try {

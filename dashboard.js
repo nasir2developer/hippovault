@@ -5,8 +5,8 @@ const api = {
   logout: `${apiBase}/api/auth/logout`,
   data: `${apiBase}/api/data`,
   export: `${apiBase}/api/export`,
-  reviews: `${apiBase}/get-reviews`,
-  reviewSubmit: `${apiBase}/submit-review`
+  reviews: `${apiBase}/api/reviews`,
+  reviewSubmit: `${apiBase}/api/reviews`
 };
 
 const appRoutes = {
@@ -258,6 +258,7 @@ const renderAccounts = () => {
       <p class="record-line">${escapeHtml(account.appUrl)}</p>
       <p class="record-line mono">${escapeHtml(account.password)}</p>
       <div class="record-actions">
+        <button class="btn btn-ghost action-btn" data-type="account" data-action="view" data-id="${account.id}" type="button">View</button>
         <button class="btn btn-ghost action-btn" data-type="account" data-action="edit" data-id="${account.id}" type="button">Edit</button>
         <button class="btn btn-danger action-btn" data-type="account" data-action="delete" data-id="${account.id}" type="button">Delete</button>
       </div>
@@ -286,6 +287,7 @@ const renderDiary = () => {
       </div>
       <p class="record-line">${escapeHtml(entry.body)}</p>
       <div class="record-actions">
+        <button class="btn btn-ghost action-btn" data-type="diary" data-action="view" data-id="${entry.id}" type="button">View</button>
         <button class="btn btn-ghost action-btn" data-type="diary" data-action="edit" data-id="${entry.id}" type="button">Edit</button>
         <button class="btn btn-danger action-btn" data-type="diary" data-action="delete" data-id="${entry.id}" type="button">Delete</button>
       </div>
@@ -310,6 +312,7 @@ const renderListCards = (items, allowDelete) => {
           : `<span class="tag-chip muted">No items yet</span>`}
       </div>
       <div class="record-actions">
+        <button class="btn btn-ghost action-btn" data-type="list" data-action="view" data-id="${list.id}" type="button">View</button>
         <button class="btn btn-ghost action-btn" data-type="list" data-action="edit" data-id="${list.id}" type="button">Edit</button>
         ${allowDelete ? `<button class="btn btn-danger action-btn" data-type="list" data-action="delete" data-id="${list.id}" type="button">Delete</button>` : ""}
       </div>
@@ -462,6 +465,17 @@ const openEditAccount = (account) => {
   });
 };
 
+const openViewAccount = (account) => {
+  openEditor("View account", `
+    <div class="stack-form">
+      <div class="field"><label>App name</label><input value="${escapeHtml(account.appName)}" readonly /></div>
+      <div class="field"><label>URL</label><input value="${escapeHtml(account.appUrl)}" readonly /></div>
+      <div class="field"><label>Username</label><input value="${escapeHtml(account.username)}" readonly /></div>
+      <div class="field"><label>Password</label><input value="${escapeHtml(account.password)}" readonly /></div>
+    </div>
+  `);
+};
+
 const openEditDiary = (entry) => {
   openEditor("Edit diary entry", `
     <form class="stack-form" id="editDiaryForm">
@@ -485,6 +499,16 @@ const openEditDiary = (entry) => {
       setFormStatus("editorStatus", error.message || "Save failed.", "error");
     }
   });
+};
+
+const openViewDiary = (entry) => {
+  openEditor("View diary entry", `
+    <div class="stack-form">
+      <div class="field"><label>Title</label><input value="${escapeHtml(entry.title)}" readonly /></div>
+      <div class="field"><label>Saved</label><input value="${escapeHtml(formatDate(entry.createdAt))}" readonly /></div>
+      <div class="field"><label>Description</label><textarea readonly>${escapeHtml(entry.body)}</textarea></div>
+    </div>
+  `);
 };
 
 const renderListEditorRows = (list) => {
@@ -550,6 +574,22 @@ const openEditList = (list) => {
       setFormStatus("editorStatus", error.message || "Save failed.", "error");
     }
   });
+};
+
+const openViewList = (list) => {
+  openEditor("View list", `
+    <div class="stack-form">
+      <div class="field"><label>List name</label><input value="${escapeHtml(list.name)}" readonly /></div>
+      <div class="field">
+        <label>Items</label>
+        <div class="tag-list">
+          ${(Array.isArray(list.items) && list.items.length)
+            ? list.items.map((item) => `<span class="tag-chip">${escapeHtml(item.itemName)}</span>`).join("")
+            : `<span class="tag-chip muted">No items yet</span>`}
+        </div>
+      </div>
+    </div>
+  `);
 };
 
 const deleteItem = async (type, id) => {
@@ -715,6 +755,13 @@ document.body.addEventListener("click", async (event) => {
     } catch (error) {
       window.alert(error.message || "Delete failed.");
     }
+    return;
+  }
+
+  if (action === "view") {
+    if (type === "account") openViewAccount(item);
+    if (type === "diary") openViewDiary(item);
+    if (type === "list") openViewList(item);
     return;
   }
 
