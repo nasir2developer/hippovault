@@ -19,6 +19,11 @@ const demoKeys = {
   data: "hippovault-demo-data"
 };
 
+const localAuthKeys = {
+  session: "hippovault-local-session",
+  dataPrefix: "hippovault-local-data-"
+};
+
 const defaultListSeed = [
   { id: "default-grocery", name: "Grocery List", locked: true, items: [] },
   { id: "default-electric", name: "Electric List", locked: true, items: [] },
@@ -96,9 +101,17 @@ const setSyncState = (title, detail) => {
 };
 
 const updateSecuritySummary = () => {
-  const modeLabel = state.mode === "demo" ? "Demo Sandbox" : "Protected";
+  const modeLabel = state.mode === "demo"
+    ? "Demo Sandbox"
+    : state.mode === "local"
+      ? "Local Test Mode"
+      : "Protected";
   const securityParts = [
-    state.mode === "demo" ? "Local demo data only" : "Encrypted server storage",
+    state.mode === "demo"
+      ? "Local demo data only"
+      : state.mode === "local"
+        ? "Browser-only test storage"
+        : "Encrypted server storage",
     window.location.protocol === "https:" ? "HTTPS transport" : "non-HTTPS environment",
     `${state.accounts.length} accounts`,
     `${state.diaryEntries.length} diary entries`
@@ -156,6 +169,16 @@ const getDemoUser = () => {
   }
 };
 
+const getLocalSessionUser = () => {
+  try {
+    return JSON.parse(localStorage.getItem(localAuthKeys.session) || "null");
+  } catch (_error) {
+    return null;
+  }
+};
+
+const getLocalDataKey = (userId) => `${localAuthKeys.dataPrefix}${userId}`;
+
 const getDemoPayload = () => {
   try {
     return JSON.parse(localStorage.getItem(demoKeys.data) || "null");
@@ -164,8 +187,27 @@ const getDemoPayload = () => {
   }
 };
 
+const getLocalPayload = (userId) => {
+  try {
+    return JSON.parse(localStorage.getItem(getLocalDataKey(userId)) || "null");
+  } catch (_error) {
+    return null;
+  }
+};
+
 const saveDemoPayload = () => {
   localStorage.setItem(demoKeys.data, JSON.stringify({
+    accounts: state.accounts,
+    diaryEntries: state.diaryEntries,
+    userLists: state.userLists,
+    defaultLists: state.defaultLists,
+    reviews: state.reviews
+  }));
+};
+
+const saveLocalPayload = () => {
+  if (!state.user?.id) return;
+  localStorage.setItem(getLocalDataKey(state.user.id), JSON.stringify({
     accounts: state.accounts,
     diaryEntries: state.diaryEntries,
     userLists: state.userLists,
@@ -365,6 +407,12 @@ const syncAll = async () => {
     setSyncState("Local", `Demo vault updated ${formatDate(state.lastSyncedAt)}`);
     return;
   }
+  if (state.mode === "local") {
+    saveLocalPayload();
+    state.lastSyncedAt = new Date().toISOString();
+    setSyncState("Local", `Test workspace updated ${formatDate(state.lastSyncedAt)}`);
+    return;
+  }
   await apiRequest(api.data, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -384,6 +432,10 @@ const loadData = async () => {
     applyPayloadToState(getDemoPayload());
     return;
   }
+  if (state.mode === "local") {
+    applyPayloadToState(getLocalPayload(state.user?.id));
+    return;
+  }
 
   const payload = await apiRequest(api.data);
   if (!payload.success || !payload.data) {
@@ -396,7 +448,7 @@ const loadData = async () => {
 };
 
 const loadReviews = async () => {
-  if (state.mode === "demo") return;
+  if (state.mode === "demo" || state.mode === "local") return;
 
   const payload = await apiRequest(api.reviews);
   if (!payload.success || !Array.isArray(payload.reviews)) {
@@ -700,7 +752,7 @@ document.getElementById("reviewForm").addEventListener("submit", async (event) =
   setFormStatus("reviewStatus", "Submitting review...");
 
   try {
-    if (state.mode === "demo") {
+    if (state.mode === "demo" || state.mode === "local") {
       state.reviews.unshift(payload);
       await syncAll();
     } else {
@@ -784,6 +836,11 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
     goHome();
     return;
   }
+  if (state.mode === "local") {
+    localStorage.removeItem(localAuthKeys.session);
+    goHome();
+    return;
+  }
 
   try {
     await apiRequest(api.logout, { method: "POST" });
@@ -796,7 +853,7 @@ exportBtn.addEventListener("click", async () => {
   exportBtn.disabled = true;
   exportBtn.textContent = "Exporting...";
   try {
-    if (state.mode === "demo") {
+    if (state.mode === "demo" || state.mode === "local") {
       downloadJsonFile("hippovault-demo-export.json", {
         exportedAt: new Date().toISOString(),
         user: state.user,
@@ -844,10 +901,33 @@ const bootstrapDemo = () => {
   renderAll();
 };
 
+const bootstrapLocal = () => {
+  const localUser = getLocalSessionUser();
+  if (!localUser) {
+    goHome();
+    return;
+  }
+
+  state.mode = "local";
+  state.user = localUser;
+  userPill.textContent = `${localUser.name} | local test mode`;
+  applyPayloadToState(getLocalPayload(localUser.id));
+  document.getElementById("reviewName").value = localUser.name || "";
+  document.getElementById("reviewEmail").value = localUser.email || "";
+  setSyncState("Local", "Test workspace loaded from browser storage");
+  renderAll();
+};
+
 const bootstrap = async () => {
   const demoUser = getDemoUser();
   if (demoUser) {
     bootstrapDemo();
+    return;
+  }
+
+  const localUser = getLocalSessionUser();
+  if (localUser) {
+    bootstrapLocal();
     return;
   }
 
@@ -867,6 +947,10 @@ const bootstrap = async () => {
   } catch (_error) {
     if (getDemoUser()) {
       bootstrapDemo();
+      return;
+    }
+    if (getLocalSessionUser()) {
+      bootstrapLocal();
       return;
     }
     goHome();

@@ -20,6 +20,12 @@ const demoKeys = {
   data: "hippovault-demo-data"
 };
 
+const localAuthKeys = {
+  users: "hippovault-local-users",
+  session: "hippovault-local-session",
+  dataPrefix: "hippovault-local-data-"
+};
+
 const authModal = document.getElementById("authModal");
 const authForm = document.getElementById("authForm");
 const authTitle = document.getElementById("authTitle");
@@ -50,6 +56,72 @@ const getDemoUser = () => {
   } catch (_error) {
     return null;
   }
+};
+
+const getLocalUsers = () => {
+  try {
+    const users = JSON.parse(localStorage.getItem(localAuthKeys.users) || "[]");
+    return Array.isArray(users) ? users : [];
+  } catch (_error) {
+    return [];
+  }
+};
+
+const saveLocalUsers = (users) => {
+  localStorage.setItem(localAuthKeys.users, JSON.stringify(users));
+};
+
+const getLocalSessionUser = () => {
+  try {
+    return JSON.parse(localStorage.getItem(localAuthKeys.session) || "null");
+  } catch (_error) {
+    return null;
+  }
+};
+
+const getLocalDataKey = (userId) => `${localAuthKeys.dataPrefix}${userId}`;
+
+const persistLocalData = (user) => {
+  const dataKey = getLocalDataKey(user.id);
+  if (!localStorage.getItem(dataKey)) {
+    localStorage.setItem(dataKey, JSON.stringify(buildDemoData(user)));
+  }
+};
+
+const startLocalSession = (user) => {
+  localStorage.setItem(localAuthKeys.session, JSON.stringify(user));
+  persistLocalData(user);
+};
+
+const findLocalUser = (email) => getLocalUsers().find((user) => user.email === email) || null;
+
+const createLocalUser = ({ name, email, password }) => {
+  const user = {
+    id: `local-${Date.now()}`,
+    name,
+    email,
+    password
+  };
+  const users = getLocalUsers();
+  users.push(user);
+  saveLocalUsers(users);
+  startLocalSession({
+    id: user.id,
+    name: user.name,
+    email: user.email
+  });
+  return user;
+};
+
+const isRecoverableAuthError = (error) => {
+  const message = String(error?.message || "").toLowerCase();
+  return [
+    "rate limit",
+    "email rate limit exceeded",
+    "cannot reach the server",
+    "supabase config is missing",
+    "supabase environment variables are not configured"
+  ].some((fragment) => message.includes(fragment));
 };
 
 const buildDemoData = (user) => ({
@@ -230,6 +302,12 @@ const hydrateSession = async () => {
     return;
   }
 
+  const localUser = getLocalSessionUser();
+  if (localUser) {
+    setAuthenticatedUI(localUser);
+    return;
+  }
+
   try {
     const supabase = await getSupabaseClient();
     const { data, error } = await supabase.auth.getUser();
@@ -280,6 +358,19 @@ authForm.addEventListener("submit", async (event) => {
     return;
   }
 
+  if (authMode === "login") {
+    const localUser = findLocalUser(email);
+    if (localUser && localUser.password === password) {
+      startLocalSession({
+        id: localUser.id,
+        name: localUser.name,
+        email: localUser.email
+      });
+      goToDashboard();
+      return;
+    }
+  }
+
   setStatus(authMode === "signup" ? "Creating account..." : "Signing in...");
 
   try {
@@ -319,6 +410,25 @@ authForm.addEventListener("submit", async (event) => {
     if (error) throw error;
     goToDashboard();
   } catch (error) {
+    if (authMode === "signup" && isRecoverableAuthError(error)) {
+      const name = authName.value.trim();
+      if (findLocalUser(email)) {
+        setStatus("A local test account with this email already exists. Log in instead.", "error");
+        updateAuthMode("login");
+        authEmail.value = email;
+        return;
+      }
+      createLocalUser({ name, email, password });
+      setStatus("Email service is limited right now. A local test account was created for this browser.", "success");
+      goToDashboard();
+      return;
+    }
+
+    if (authMode === "login" && isRecoverableAuthError(error)) {
+      setStatus("Email auth is temporarily limited. Use the demo account or create a local test account with Sign Up.", "error");
+      return;
+    }
+
     setStatus(error.message || "Authentication failed.", "error");
   }
 });
