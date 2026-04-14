@@ -3,7 +3,8 @@ const authApiBase = window.location.protocol === "file:" ? "http://localhost:300
 const authApi = {
   me: `${authApiBase}/api/auth/me`,
   login: `${authApiBase}/api/auth/login`,
-  signup: `${authApiBase}/api/auth/signup`
+  signup: `${authApiBase}/api/auth/signup`,
+  verifyOtp: `${authApiBase}/api/auth/verify-otp`
 };
 
 const appRoutes = {
@@ -30,10 +31,12 @@ const authTitle = document.getElementById("authTitle");
 const authSubtitle = document.getElementById("authSubtitle");
 const authNameField = document.getElementById("authNameField");
 const authConfirmField = document.getElementById("authConfirmField");
+const authOtpField = document.getElementById("authOtpField");
 const authName = document.getElementById("authName");
 const authEmail = document.getElementById("authEmail");
 const authPassword = document.getElementById("authPassword");
 const authConfirmPassword = document.getElementById("authConfirmPassword");
+const authOtp = document.getElementById("authOtp");
 const authStatus = document.getElementById("authStatus");
 const authSubmit = document.getElementById("authSubmit");
 const authSwitch = document.getElementById("authSwitch");
@@ -45,6 +48,7 @@ const loginTrigger = document.getElementById("loginTrigger");
 const signupTrigger = document.getElementById("signupTrigger");
 
 let authMode = "login";
+let pendingOtpChallenge = null;
 
 const getDemoUser = () => {
   try {
@@ -190,9 +194,32 @@ const updateAuthMode = (mode) => {
   authSubmit.textContent = signup ? "Create Account" : "Login";
   authNameField.classList.toggle("hidden", !signup);
   authConfirmField.classList.toggle("hidden", !signup);
+  authOtpField.classList.add("hidden");
   authSwitchText.textContent = signup ? "Already have an account?" : "Need a new account?";
   authSwitch.textContent = signup ? "Login" : "Sign Up";
+  pendingOtpChallenge = null;
   setStatus("");
+};
+
+const enterOtpMode = (email, payload) => {
+  pendingOtpChallenge = {
+    challengeId: payload.challengeId,
+    email
+  };
+  authTitle.textContent = "Verify OTP";
+  authSubtitle.textContent = `Enter the 6-digit code sent to ${email}.`;
+  authSubmit.textContent = "Verify OTP";
+  authNameField.classList.add("hidden");
+  authConfirmField.classList.add("hidden");
+  authOtpField.classList.remove("hidden");
+  authOtp.value = "";
+  authSwitchText.textContent = "Need another attempt?";
+  authSwitch.textContent = "Back to Login";
+  if (payload.otpPreview) {
+    setStatus(`Development OTP: ${payload.otpPreview}`, "success");
+  } else {
+    setStatus("OTP sent to your email.", "success");
+  }
 };
 
 const openAuth = (mode) => {
@@ -207,6 +234,7 @@ const closeAuthModal = () => {
   authModal.setAttribute("aria-hidden", "true");
   document.body.classList.remove("modal-open");
   authForm.reset();
+  pendingOtpChallenge = null;
   setStatus("");
 };
 
@@ -240,6 +268,32 @@ authForm.addEventListener("submit", async (event) => {
   const email = authEmail.value.trim();
   const normalizedEmail = email.toLowerCase();
   const password = authPassword.value;
+
+  if (pendingOtpChallenge) {
+    const otp = authOtp.value.trim();
+    if (!otp) {
+      setStatus("Enter the OTP code.", "error");
+      return;
+    }
+    setStatus("Verifying OTP...");
+    try {
+      const payload = await apiRequest(authApi.verifyOtp, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          challengeId: pendingOtpChallenge.challengeId,
+          otp
+        })
+      });
+      if (!payload.success) {
+        throw new Error(payload.message || "OTP verification failed.");
+      }
+      goToDashboard();
+    } catch (error) {
+      setStatus(error.message || "OTP verification failed.", "error");
+    }
+    return;
+  }
 
   if (!email || !password) {
     setStatus("Email and password are required.", "error");
@@ -293,6 +347,11 @@ authForm.addEventListener("submit", async (event) => {
       throw new Error(payload.message || "Authentication failed.");
     }
 
+    if (payload.requiresOtp) {
+      enterOtpMode(normalizedEmail, payload);
+      return;
+    }
+
     goToDashboard();
   } catch (error) {
     if (authMode === "signup" || error.message.includes("Demo mode is available")) {
@@ -309,6 +368,10 @@ authForm.addEventListener("submit", async (event) => {
 });
 
 authSwitch.addEventListener("click", () => {
+  if (pendingOtpChallenge) {
+    updateAuthMode("login");
+    return;
+  }
   updateAuthMode(authMode === "login" ? "signup" : "login");
 });
 

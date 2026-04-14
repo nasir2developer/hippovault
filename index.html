@@ -264,6 +264,10 @@
           <label for="authConfirmPassword">Confirm password</label>
           <input id="authConfirmPassword" name="confirmPassword" type="password" placeholder="Repeat your password" />
         </div>
+        <div class="field hidden" id="authOtpField">
+          <label for="authOtp">One-time password</label>
+          <input id="authOtp" name="otp" type="text" inputmode="numeric" maxlength="6" placeholder="Enter 6-digit code" />
+        </div>
         <div class="form-status" id="authStatus" aria-live="polite"></div>
         <button class="btn btn-primary btn-large" id="authSubmit" type="submit">Login</button>
       </form>

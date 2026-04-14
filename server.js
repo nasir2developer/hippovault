@@ -5,6 +5,7 @@ const cors = require("cors");
 const session = require("express-session");
 const pgSession = require("connect-pg-simple")(session);
 const bcrypt = require("bcryptjs");
+const nodemailer = require("nodemailer");
 const { Pool } = require("pg");
 require("dotenv").config();
 
@@ -17,6 +18,7 @@ const AUTH_WINDOW_MS = 15 * 60 * 1000;
 const AUTH_MAX_ATTEMPTS = 10;
 const API_WINDOW_MS = 60 * 1000;
 const API_MAX_REQUESTS = 240;
+const OTP_TTL_MINUTES = 10;
 const STATIC_ASSET_PATTERN = /\.(?:css|js|png|jpg|jpeg|gif|svg|webp|ico|woff2?)$/i;
 const authRateBucket = new Map();
 const apiRateBucket = new Map();
@@ -56,6 +58,11 @@ const dataEncryptionKey = getRequiredEnv(
   ["DATA_ENCRYPTION_KEY", "hippovault_DATA_ENCRYPTION_KEY"],
   "DATA_ENCRYPTION_KEY or hippovault_DATA_ENCRYPTION_KEY is required (32-byte key in base64)."
 );
+const smtpHost = getEnv("SMTP_HOST", "hippovault_SMTP_HOST");
+const smtpPort = Number(getEnv("SMTP_PORT", "hippovault_SMTP_PORT") || 587);
+const smtpUser = getEnv("SMTP_USER", "hippovault_SMTP_USER");
+const smtpPass = getEnv("SMTP_PASS", "hippovault_SMTP_PASS");
+const smtpFrom = getEnv("SMTP_FROM", "hippovault_SMTP_FROM");
 
 const encryptionKey = Buffer.from(dataEncryptionKey, "base64");
 if (encryptionKey.length !== 32) {
@@ -66,6 +73,18 @@ const pool = new Pool({
   connectionString: databaseUrl,
   ssl: isProduction ? { rejectUnauthorized: false } : undefined
 });
+
+const mailTransport = smtpHost && smtpUser && smtpPass && smtpFrom
+  ? nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpPort === 465,
+    auth: {
+      user: smtpUser,
+      pass: smtpPass
+    }
+  })
+  : null;
 
 const parseOrigins = () => {
   const configured = getEnv("CORS_ORIGIN", "hippovault_CORS_ORIGIN")
@@ -201,6 +220,9 @@ const validateReviewRating = (value) => {
   return Number.isInteger(rating) && rating >= 1 && rating <= 5 ? rating : null;
 };
 
+const buildOtpCode = () => String(Math.floor(100000 + Math.random() * 900000));
+const hashOtp = (value) => crypto.createHash("sha256").update(String(value)).digest("hex");
+
 const dedupeById = (items) => {
   const seen = new Set();
   const output = [];
@@ -298,6 +320,29 @@ const rotateSession = (req, user, res, callback) => {
     req.session.userEmail = user.email;
     req.session.userName = user.name;
     return callback();
+  });
+};
+
+const sendOtpEmail = async ({ email, name, otpCode }) => {
+  if (!mailTransport) {
+    if (isProduction) {
+      throw new Error("OTP email service is not configured.");
+    }
+    return;
+  }
+
+  await mailTransport.sendMail({
+    from: smtpFrom,
+    to: email,
+    subject: "Your Hippovault login OTP",
+    text: [
+      `Hello ${name || "User"},`,
+      "",
+      `Your Hippovault login verification code is: ${otpCode}`,
+      "",
+      `This code expires in ${OTP_TTL_MINUTES} minutes.`,
+      "If you did not request this login, you can ignore this email."
+    ].join("\n")
   });
 };
 
@@ -493,13 +538,74 @@ app.post("/api/auth/login", authLimiter, async (req, res) => {
     }
 
     await ensureDefaultLists(user.id);
-    return rotateSession(req, user, res, () => res.json({
+    const challengeId = makeId();
+    const otpCode = buildOtpCode();
+    const otpHash = hashOtp(otpCode);
+    const expiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000).toISOString();
+
+    await pool.query("DELETE FROM login_otp_challenges WHERE user_id = $1 OR expires_at < NOW()", [user.id]);
+    await pool.query(
+      "INSERT INTO login_otp_challenges (id, user_id, otp_hash, expires_at) VALUES ($1, $2, $3, $4)",
+      [challengeId, user.id, otpHash, expiresAt]
+    );
+
+    await sendOtpEmail({ email: user.email, name: user.name, otpCode });
+
+    return res.json({
       success: true,
-      user: { id: user.id, name: user.name, email: user.email }
-    }));
+      requiresOtp: true,
+      challengeId,
+      message: "OTP sent. Enter the verification code to continue.",
+      otpPreview: isProduction ? undefined : otpCode
+    });
   } catch (error) {
     console.error("login error:", error);
-    return res.status(500).json({ success: false, message: "Failed to login." });
+    return res.status(500).json({ success: false, message: error.message || "Failed to login." });
+  }
+});
+
+app.post("/api/auth/verify-otp", authLimiter, async (req, res) => {
+  try {
+    const challengeId = limitString(req.body?.challengeId, 120);
+    const otp = limitString(req.body?.otp, 6);
+    if (!challengeId || !otp) {
+      return res.status(400).json({ success: false, message: "OTP and challenge are required." });
+    }
+
+    const result = await pool.query(
+      `SELECT challenge.id, challenge.user_id, challenge.otp_hash, challenge.expires_at, challenge.consumed_at, user_account.name, user_account.email
+       FROM login_otp_challenges AS challenge
+       JOIN users AS user_account ON user_account.id = challenge.user_id
+       WHERE challenge.id = $1`,
+      [challengeId]
+    );
+    const challenge = result.rows[0];
+    if (!challenge) {
+      return res.status(404).json({ success: false, message: "OTP challenge not found." });
+    }
+    if (challenge.consumed_at) {
+      return res.status(400).json({ success: false, message: "OTP challenge already used." });
+    }
+    if (new Date(challenge.expires_at).getTime() < Date.now()) {
+      return res.status(400).json({ success: false, message: "OTP expired. Login again to get a new code." });
+    }
+    if (hashOtp(otp) !== challenge.otp_hash) {
+      return res.status(401).json({ success: false, message: "Invalid OTP code." });
+    }
+
+    await pool.query("UPDATE login_otp_challenges SET consumed_at = NOW() WHERE id = $1", [challengeId]);
+
+    return rotateSession(req, {
+      id: challenge.user_id,
+      name: challenge.name,
+      email: challenge.email
+    }, res, () => res.json({
+      success: true,
+      user: { id: challenge.user_id, name: challenge.name, email: challenge.email }
+    }));
+  } catch (error) {
+    console.error("verify otp error:", error);
+    return res.status(500).json({ success: false, message: "Failed to verify OTP." });
   }
 });
 
