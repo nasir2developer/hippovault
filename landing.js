@@ -1,11 +1,6 @@
-const authApiBase = window.location.protocol === "file:" ? "http://localhost:3000" : "";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const authApi = {
-  me: `${authApiBase}/api/auth/me`,
-  login: `${authApiBase}/api/auth/login`,
-  signup: `${authApiBase}/api/auth/signup`,
-  verifyOtp: `${authApiBase}/api/auth/verify-otp`
-};
+const configApi = window.location.protocol === "file:" ? null : "/api/config";
 
 const appRoutes = {
   home: window.location.protocol === "file:" ? "./index.html" : "/",
@@ -36,7 +31,6 @@ const authName = document.getElementById("authName");
 const authEmail = document.getElementById("authEmail");
 const authPassword = document.getElementById("authPassword");
 const authConfirmPassword = document.getElementById("authConfirmPassword");
-const authOtp = document.getElementById("authOtp");
 const authStatus = document.getElementById("authStatus");
 const authSubmit = document.getElementById("authSubmit");
 const authSwitch = document.getElementById("authSwitch");
@@ -48,7 +42,7 @@ const loginTrigger = document.getElementById("loginTrigger");
 const signupTrigger = document.getElementById("signupTrigger");
 
 let authMode = "login";
-let pendingOtpChallenge = null;
+let supabaseClientPromise = null;
 
 const getDemoUser = () => {
   try {
@@ -155,35 +149,6 @@ const setStatus = (message, type = "") => {
   if (type) authStatus.classList.add(type);
 };
 
-const parseJsonSafe = async (response) => {
-  try {
-    return await response.json();
-  } catch (_error) {
-    return null;
-  }
-};
-
-const apiRequest = async (url, options = {}) => {
-  let response;
-  try {
-    response = await fetch(url, {
-      credentials: "include",
-      ...options
-    });
-  } catch (_error) {
-    throw new Error("Cannot reach the server. Demo mode is available.");
-  }
-
-  const payload = await parseJsonSafe(response);
-  if (!response.ok) {
-    throw new Error(payload?.message || `Request failed (${response.status}).`);
-  }
-  if (!payload || typeof payload !== "object") {
-    throw new Error("Server returned invalid JSON.");
-  }
-  return payload;
-};
-
 const updateAuthMode = (mode) => {
   authMode = mode;
   const signup = mode === "signup";
@@ -197,29 +162,7 @@ const updateAuthMode = (mode) => {
   authOtpField.classList.add("hidden");
   authSwitchText.textContent = signup ? "Already have an account?" : "Need a new account?";
   authSwitch.textContent = signup ? "Login" : "Sign Up";
-  pendingOtpChallenge = null;
   setStatus("");
-};
-
-const enterOtpMode = (email, payload) => {
-  pendingOtpChallenge = {
-    challengeId: payload.challengeId,
-    email
-  };
-  authTitle.textContent = "Verify OTP";
-  authSubtitle.textContent = `Enter the 6-digit code sent to ${email}.`;
-  authSubmit.textContent = "Verify OTP";
-  authNameField.classList.add("hidden");
-  authConfirmField.classList.add("hidden");
-  authOtpField.classList.remove("hidden");
-  authOtp.value = "";
-  authSwitchText.textContent = "Need another attempt?";
-  authSwitch.textContent = "Back to Login";
-  if (payload.otpPreview) {
-    setStatus(`Development OTP: ${payload.otpPreview}`, "success");
-  } else {
-    setStatus("OTP sent to your email.", "success");
-  }
 };
 
 const openAuth = (mode) => {
@@ -234,7 +177,6 @@ const closeAuthModal = () => {
   authModal.setAttribute("aria-hidden", "true");
   document.body.classList.remove("modal-open");
   authForm.reset();
-  pendingOtpChallenge = null;
   setStatus("");
 };
 
@@ -247,6 +189,40 @@ const setAuthenticatedUI = (user) => {
   sessionChip.textContent = loggedIn ? `${user.name} | authenticated` : "";
 };
 
+const getSupabaseClient = async () => {
+  if (!configApi) {
+    throw new Error("Supabase config is unavailable in file mode. Use the demo login or run the site with Vercel/local server.");
+  }
+
+  if (!supabaseClientPromise) {
+    supabaseClientPromise = fetch(configApi)
+      .then(async (response) => {
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || !payload?.supabaseUrl || !payload?.supabaseAnonKey) {
+          throw new Error(payload?.message || "Supabase config is missing.");
+        }
+        return createClient(payload.supabaseUrl, payload.supabaseAnonKey, {
+          auth: {
+            persistSession: true,
+            autoRefreshToken: true,
+            detectSessionInUrl: true
+          }
+        });
+      });
+  }
+
+  return supabaseClientPromise;
+};
+
+const buildUserIdentity = (user) => {
+  const metadataName = user?.user_metadata?.full_name || user?.user_metadata?.name || "";
+  return {
+    id: user?.id || "",
+    email: user?.email || "",
+    name: metadataName || user?.email?.split("@")[0] || "User"
+  };
+};
+
 const hydrateSession = async () => {
   const demoUser = getDemoUser();
   if (demoUser) {
@@ -255,9 +231,13 @@ const hydrateSession = async () => {
   }
 
   try {
-    const payload = await apiRequest(authApi.me);
-    if (!payload.success || !payload.user) return;
-    setAuthenticatedUI(payload.user);
+    const supabase = await getSupabaseClient();
+    const { data, error } = await supabase.auth.getUser();
+    if (error || !data?.user) {
+      setAuthenticatedUI(null);
+      return;
+    }
+    setAuthenticatedUI(buildUserIdentity(data.user));
   } catch (_error) {
     setAuthenticatedUI(null);
   }
@@ -265,35 +245,8 @@ const hydrateSession = async () => {
 
 authForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const email = authEmail.value.trim();
-  const normalizedEmail = email.toLowerCase();
+  const email = authEmail.value.trim().toLowerCase();
   const password = authPassword.value;
-
-  if (pendingOtpChallenge) {
-    const otp = authOtp.value.trim();
-    if (!otp) {
-      setStatus("Enter the OTP code.", "error");
-      return;
-    }
-    setStatus("Verifying OTP...");
-    try {
-      const payload = await apiRequest(authApi.verifyOtp, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          challengeId: pendingOtpChallenge.challengeId,
-          otp
-        })
-      });
-      if (!payload.success) {
-        throw new Error(payload.message || "OTP verification failed.");
-      }
-      goToDashboard();
-    } catch (error) {
-      setStatus(error.message || "OTP verification failed.", "error");
-    }
-    return;
-  }
 
   if (!email || !password) {
     setStatus("Email and password are required.", "error");
@@ -317,7 +270,7 @@ authForm.addEventListener("submit", async (event) => {
     }
   }
 
-  if (authMode === "login" && normalizedEmail === demoAccount.email && password === demoAccount.password) {
+  if (authMode === "login" && email === demoAccount.email && password === demoAccount.password) {
     startDemoSession({
       id: demoAccount.id,
       name: demoAccount.name,
@@ -330,48 +283,47 @@ authForm.addEventListener("submit", async (event) => {
   setStatus(authMode === "signup" ? "Creating account..." : "Signing in...");
 
   try {
-    const payload = await apiRequest(
-      authMode === "signup" ? authApi.signup : authApi.login,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          authMode === "signup"
-            ? { name: authName.value.trim(), email: normalizedEmail, password }
-            : { email: normalizedEmail, password }
-        )
+    const supabase = await getSupabaseClient();
+
+    if (authMode === "signup") {
+      const name = authName.value.trim();
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            full_name: name,
+            name
+          }
+        }
+      });
+
+      if (error) throw error;
+
+      if (data.session) {
+        goToDashboard();
+        return;
       }
-    );
 
-    if (!payload.success) {
-      throw new Error(payload.message || "Authentication failed.");
-    }
-
-    if (payload.requiresOtp) {
-      enterOtpMode(normalizedEmail, payload);
+      setStatus("Account created. Check your email for the confirmation link, then log in.", "success");
+      updateAuthMode("login");
+      authEmail.value = email;
       return;
     }
 
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password
+    });
+
+    if (error) throw error;
     goToDashboard();
   } catch (error) {
-    if (authMode === "signup" || error.message.includes("Demo mode is available")) {
-      startDemoSession({
-        id: "demo-user",
-        name: authName.value.trim() || email.split("@")[0] || "Demo User",
-        email: normalizedEmail
-      });
-      goToDashboard();
-      return;
-    }
     setStatus(error.message || "Authentication failed.", "error");
   }
 });
 
 authSwitch.addEventListener("click", () => {
-  if (pendingOtpChallenge) {
-    updateAuthMode("login");
-    return;
-  }
   updateAuthMode(authMode === "login" ? "signup" : "login");
 });
 
