@@ -21,11 +21,15 @@ const getEnv = (...names) => {
 
 app.get("/api/config", (_req, res) => {
   const supabaseUrl = getEnv(
+    "VITE_SUPABASE_URL",
+    "PUBLIC_SUPABASE_URL",
     "NEXT_PUBLIC_SUPABASE_URL",
     "SUPABASE_URL",
     "hippovault_SUPABASE_URL"
   );
   const supabaseAnonKey = getEnv(
+    "VITE_SUPABASE_ANON_KEY",
+    "PUBLIC_SUPABASE_ANON_KEY",
     "NEXT_PUBLIC_SUPABASE_ANON_KEY",
     "SUPABASE_ANON_KEY",
     "hippovault_SUPABASE_ANON_KEY"

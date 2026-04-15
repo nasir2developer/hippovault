@@ -20,6 +20,11 @@ const demoKeys = {
   data: "hippovault-demo-data"
 };
 
+const authStorageKeys = {
+  token: "token",
+  user: "user"
+};
+
 const localAuthKeys = {
   users: "hippovault-local-users",
   session: "hippovault-local-session",
@@ -71,6 +76,27 @@ const saveLocalUsers = (users) => {
   localStorage.setItem(localAuthKeys.users, JSON.stringify(users));
 };
 
+const getStoredToken = () => localStorage.getItem(authStorageKeys.token) || "";
+
+const getStoredUser = () => {
+  try {
+    return JSON.parse(localStorage.getItem(authStorageKeys.user) || "null");
+  } catch (_error) {
+    return null;
+  }
+};
+
+const persistAuth = (receivedToken, userData) => {
+  if (receivedToken) {
+    localStorage.setItem(authStorageKeys.token, receivedToken);
+  }
+  if (userData) {
+    localStorage.setItem(authStorageKeys.user, JSON.stringify(userData));
+  }
+};
+
+const createSessionToken = (prefix, userId) => `${prefix}-${userId}-${Date.now()}`;
+
 const getLocalSessionUser = () => {
   try {
     return JSON.parse(localStorage.getItem(localAuthKeys.session) || "null");
@@ -90,6 +116,7 @@ const persistLocalData = (user) => {
 
 const startLocalSession = (user) => {
   localStorage.setItem(localAuthKeys.session, JSON.stringify(user));
+  persistAuth(createSessionToken("local", user.id), user);
   persistLocalData(user);
 };
 
@@ -206,6 +233,7 @@ const buildDemoData = (user) => ({
 const startDemoSession = (user) => {
   localStorage.setItem(demoKeys.user, JSON.stringify(user));
   localStorage.setItem(demoKeys.enabled, "true");
+  persistAuth(createSessionToken("demo", user.id), user);
   if (!localStorage.getItem(demoKeys.data)) {
     localStorage.setItem(demoKeys.data, JSON.stringify(buildDemoData(user)));
   }
@@ -296,26 +324,40 @@ const buildUserIdentity = (user) => {
 };
 
 const hydrateSession = async () => {
+  const storedToken = getStoredToken();
+  const storedUser = getStoredUser();
+  if (storedToken && storedUser) {
+    goToDashboard();
+    return;
+  }
+
   const demoUser = getDemoUser();
   if (demoUser) {
+    persistAuth(createSessionToken("demo", demoUser.id), demoUser);
     setAuthenticatedUI(demoUser);
+    goToDashboard();
     return;
   }
 
   const localUser = getLocalSessionUser();
   if (localUser) {
+    persistAuth(createSessionToken("local", localUser.id), localUser);
     setAuthenticatedUI(localUser);
+    goToDashboard();
     return;
   }
 
   try {
     const supabase = await getSupabaseClient();
-    const { data, error } = await supabase.auth.getUser();
-    if (error || !data?.user) {
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError || !sessionData?.session?.access_token) {
       setAuthenticatedUI(null);
       return;
     }
-    setAuthenticatedUI(buildUserIdentity(data.user));
+    const sessionUser = buildUserIdentity(sessionData.session.user);
+    persistAuth(sessionData.session.access_token, sessionUser);
+    setAuthenticatedUI(sessionUser);
+    goToDashboard();
   } catch (_error) {
     setAuthenticatedUI(null);
   }
@@ -392,6 +434,7 @@ authForm.addEventListener("submit", async (event) => {
       if (error) throw error;
 
       if (data.session) {
+        persistAuth(data.session.access_token, buildUserIdentity(data.session.user));
         goToDashboard();
         return;
       }
@@ -402,12 +445,15 @@ authForm.addEventListener("submit", async (event) => {
       return;
     }
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password
     });
 
     if (error) throw error;
+    if (data?.session?.access_token) {
+      persistAuth(data.session.access_token, buildUserIdentity(data.session.user));
+    }
     goToDashboard();
   } catch (error) {
     if (authMode === "signup" && isRecoverableAuthError(error)) {
