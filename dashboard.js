@@ -53,6 +53,7 @@ const state = {
 
 document.body.classList.add("auth-checking");
 
+const dashboardShell = document.querySelector(".dashboard-shell");
 const userPill = document.getElementById("userPill");
 const authGuard = document.getElementById("authGuard");
 const editorModal = document.getElementById("editorModal");
@@ -259,14 +260,19 @@ const goHome = () => {
   window.location.href = appRoutes.home;
 };
 
-const finishAuthCheck = () => {
-  document.body.classList.remove("auth-checking");
-  if (authGuard) authGuard.setAttribute("hidden", "");
+const setLoading = (isLoading) => {
+  document.body.classList.toggle("auth-checking", isLoading);
+  if (authGuard) authGuard.hidden = !isLoading;
 };
 
 const redirectHomeIfUnauthed = () => {
   clearStoredAuth();
-  goHome();
+};
+
+const renderProtectedContent = () => {
+  if (authGuard && !authGuard.hidden) return;
+  if (!dashboardShell) return;
+  dashboardShell.hidden = !state.user;
 };
 
 const normalizeListItems = (items) => {
@@ -939,8 +945,7 @@ document.addEventListener("keydown", (event) => {
 const bootstrapDemo = () => {
   const demoUser = getDemoUser();
   if (!demoUser) {
-    redirectHomeIfUnauthed();
-    return;
+    return false;
   }
 
   state.mode = "demo";
@@ -952,14 +957,13 @@ const bootstrapDemo = () => {
   document.getElementById("reviewEmail").value = demoUser.email || "";
   setSyncState("Local", "Demo workspace loaded in browser storage");
   renderAll();
-  finishAuthCheck();
+  return true;
 };
 
 const bootstrapLocal = () => {
   const localUser = getLocalSessionUser();
   if (!localUser) {
-    redirectHomeIfUnauthed();
-    return;
+    return false;
   }
 
   state.mode = "local";
@@ -971,29 +975,31 @@ const bootstrapLocal = () => {
   document.getElementById("reviewEmail").value = localUser.email || "";
   setSyncState("Local", "Test workspace loaded from browser storage");
   renderAll();
-  finishAuthCheck();
+  return true;
 };
 
 const bootstrap = async () => {
-  const storedToken = getStoredToken();
-  if (!storedToken) {
-    redirectHomeIfUnauthed();
-    return;
-  }
-
-  const demoUser = getDemoUser();
-  if (demoUser) {
-    bootstrapDemo();
-    return;
-  }
-
-  const localUser = getLocalSessionUser();
-  if (localUser) {
-    bootstrapLocal();
-    return;
-  }
+  let shouldRedirectHome = false;
 
   try {
+    const storedToken = getStoredToken();
+    if (!storedToken) {
+      shouldRedirectHome = true;
+      return;
+    }
+
+    const demoUser = getDemoUser();
+    if (demoUser) {
+      if (!bootstrapDemo()) shouldRedirectHome = true;
+      return;
+    }
+
+    const localUser = getLocalSessionUser();
+    if (localUser) {
+      if (!bootstrapLocal()) shouldRedirectHome = true;
+      return;
+    }
+
     const session = await apiRequest(api.me);
     if (session.success && session.user) {
       state.user = session.user;
@@ -1004,28 +1010,33 @@ const bootstrap = async () => {
       await loadData();
       await loadReviews();
       renderAll();
-      finishAuthCheck();
       return;
     }
+
+    const storedUser = getStoredUser();
+    if (storedUser) {
+      state.mode = "local";
+      state.user = storedUser;
+      userPill.textContent = `${storedUser.name} | cached session`;
+      applyPayloadToState(getLocalPayload(storedUser.id));
+      document.getElementById("reviewName").value = storedUser.name || "";
+      document.getElementById("reviewEmail").value = storedUser.email || "";
+      setSyncState("Local", "Cached workspace restored from browser storage");
+      renderAll();
+      return;
+    }
+
+    shouldRedirectHome = true;
   } catch (_error) {
-    // Fall through to local token-backed restore.
+    shouldRedirectHome = true;
+  } finally {
+    setLoading(false);
+    renderProtectedContent();
+    if (shouldRedirectHome || !state.user) {
+      redirectHomeIfUnauthed();
+      goHome();
+    }
   }
-
-  const storedUser = getStoredUser();
-  if (storedUser) {
-    state.mode = "local";
-    state.user = storedUser;
-    userPill.textContent = `${storedUser.name} | cached session`;
-    applyPayloadToState(getLocalPayload(storedUser.id));
-    document.getElementById("reviewName").value = storedUser.name || "";
-    document.getElementById("reviewEmail").value = storedUser.email || "";
-    setSyncState("Local", "Cached workspace restored from browser storage");
-    renderAll();
-    finishAuthCheck();
-    return;
-  }
-
-  redirectHomeIfUnauthed();
 };
 
 bootstrap();
