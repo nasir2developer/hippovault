@@ -209,7 +209,7 @@ const goHome = () => {
 
 const setLoading = (isLoading) => {
   document.body.classList.toggle("auth-checking", isLoading);
-  if (authGuard) authGuard.hidden = !isLoading;
+  if (authGuard) authGuard.hidden = true;
   if (dashboardShell) dashboardShell.hidden = isLoading || !state.user;
 };
 
@@ -900,7 +900,7 @@ const bootstrap = async () => {
     const supabase = await getSupabase();
     const { data: { session } } = await withTimeout(
       supabase.auth.getSession(),
-      8000,
+      4000,
       "Session lookup timed out."
     );
     if (!session) {

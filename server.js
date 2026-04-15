@@ -42,6 +42,8 @@ app.get("/api/config", (_req, res) => {
     });
   }
 
+  res.set("Cache-Control", "public, max-age=3600");
+
   return res.json({
     success: true,
     supabaseUrl,
