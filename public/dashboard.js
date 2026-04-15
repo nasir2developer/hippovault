@@ -113,13 +113,13 @@ const updateSecuritySummary = () => {
   const modeLabel = state.mode === "demo"
     ? "Demo Sandbox"
     : state.mode === "local"
-      ? "Local Test Mode"
+      ? "Browser Workspace"
       : "Protected";
   const securityParts = [
     state.mode === "demo"
       ? "Local demo data only"
       : state.mode === "local"
-        ? "Browser-only test storage"
+        ? "Browser-cached workspace storage"
         : "Encrypted server storage",
     window.location.protocol === "https:" ? "HTTPS transport" : "non-HTTPS environment",
     `${state.accounts.length} accounts`,
@@ -978,11 +978,29 @@ const bootstrapLocal = () => {
   return true;
 };
 
+const bootstrapCached = (cachedUser, detail = "Cached workspace restored from browser storage") => {
+  if (!cachedUser) {
+    return false;
+  }
+
+  state.mode = "local";
+  state.user = cachedUser;
+  persistAuth(getStoredToken(), cachedUser);
+  userPill.textContent = `${cachedUser.name} | cached session`;
+  applyPayloadToState(getLocalPayload(cachedUser.id));
+  document.getElementById("reviewName").value = cachedUser.name || "";
+  document.getElementById("reviewEmail").value = cachedUser.email || "";
+  setSyncState("Local", detail);
+  renderAll();
+  return true;
+};
+
 const bootstrap = async () => {
   let shouldRedirectHome = false;
 
   try {
     const storedToken = getStoredToken();
+    const storedUser = getStoredUser();
     if (!storedToken) {
       shouldRedirectHome = true;
       return;
@@ -1000,6 +1018,11 @@ const bootstrap = async () => {
       return;
     }
 
+    if (storedUser && !apiBase) {
+      if (!bootstrapCached(storedUser)) shouldRedirectHome = true;
+      return;
+    }
+
     const session = await apiRequest(api.me);
     if (session.success && session.user) {
       state.user = session.user;
@@ -1013,21 +1036,17 @@ const bootstrap = async () => {
       return;
     }
 
-    const storedUser = getStoredUser();
     if (storedUser) {
-      state.mode = "local";
-      state.user = storedUser;
-      userPill.textContent = `${storedUser.name} | cached session`;
-      applyPayloadToState(getLocalPayload(storedUser.id));
-      document.getElementById("reviewName").value = storedUser.name || "";
-      document.getElementById("reviewEmail").value = storedUser.email || "";
-      setSyncState("Local", "Cached workspace restored from browser storage");
-      renderAll();
+      bootstrapCached(storedUser);
       return;
     }
 
     shouldRedirectHome = true;
   } catch (_error) {
+    const storedUser = getStoredUser();
+    if (storedUser && bootstrapCached(storedUser, "API session check failed, restored cached workspace")) {
+      return;
+    }
     shouldRedirectHome = true;
   } finally {
     setLoading(false);
