@@ -1,4 +1,4 @@
-import { supabase } from "./lib/supabaseClient.js";
+import { getSupabaseClient } from "./lib/supabaseClient.js";
 
 const appRoutes = {
   home: window.location.protocol === "file:" ? "./index.html" : "/",
@@ -27,6 +27,9 @@ const loginTrigger = document.getElementById("loginTrigger");
 const signupTrigger = document.getElementById("signupTrigger");
 
 let authMode = "login";
+let authSubscription = null;
+
+const getSupabase = async () => getSupabaseClient();
 
 const isRecoverableAuthError = (error) => {
   const message = String(error?.message || "").toLowerCase();
@@ -115,6 +118,7 @@ const getFriendlyAuthMessage = (error) => {
 
 const hydrateSession = async () => {
   try {
+    const supabase = await getSupabase();
     const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
     if (sessionError || !sessionData?.session) {
       setAuthenticatedUI(null);
@@ -158,6 +162,7 @@ authForm.addEventListener("submit", async (event) => {
   setStatus(authMode === "signup" ? "Creating account..." : "Signing in...");
 
   try {
+    const supabase = await getSupabase();
     if (authMode === "signup") {
       const name = authName.value.trim();
       const { data, error } = await supabase.auth.signUp({
@@ -224,12 +229,24 @@ document.addEventListener("keydown", (event) => {
 
 dashboardTrigger.setAttribute("href", appRoutes.dashboard);
 
-const { data: { subscription: authSubscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-  setAuthenticatedUI(session ? buildUserIdentity(session.user) : null);
-});
+const bindAuthListener = async () => {
+  try {
+    const supabase = await getSupabase();
+    if (authSubscription) {
+      authSubscription.unsubscribe();
+    }
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthenticatedUI(session ? buildUserIdentity(session.user) : null);
+    });
+    authSubscription = data.subscription;
+  } catch (_error) {
+    setAuthenticatedUI(null);
+  }
+};
 
 window.addEventListener("pagehide", () => {
-  authSubscription.unsubscribe();
+  authSubscription?.unsubscribe();
 }, { once: true });
 
+bindAuthListener();
 hydrateSession();

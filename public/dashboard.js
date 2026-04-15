@@ -1,4 +1,4 @@
-import { supabase } from "./lib/supabaseClient.js";
+import { getSupabaseClient } from "./lib/supabaseClient.js";
 
 const apiBase = window.location.protocol === "file:" ? "http://localhost:3000" : "";
 
@@ -41,8 +41,6 @@ const state = {
   lastSyncedAt: null
 };
 
-document.body.classList.add("auth-checking");
-
 const dashboardShell = document.querySelector(".dashboard-shell");
 const userPill = document.getElementById("userPill");
 const authGuard = document.getElementById("authGuard");
@@ -57,6 +55,9 @@ const exportBtn = document.getElementById("exportBtn");
 const accountSearch = document.getElementById("accountSearch");
 const diarySearch = document.getElementById("diarySearch");
 const reviewSearch = document.getElementById("reviewSearch");
+let authSubscription = null;
+
+const getSupabase = async () => getSupabaseClient();
 
 const setFormStatus = (id, message, type = "") => {
   const node = document.getElementById(id);
@@ -131,8 +132,25 @@ const parseJsonSafe = async (response) => {
   }
 };
 
+const withTimeout = async (promise, ms, message) => {
+  let timeoutId = 0;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error(message)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+};
+
 const getActiveSession = async () => {
-  const { data: { session } } = await supabase.auth.getSession();
+  const supabase = await getSupabase();
+  const { data: { session } } = await withTimeout(
+    supabase.auth.getSession(),
+    8000,
+    "Session lookup timed out."
+  );
   return session || null;
 };
 
@@ -192,6 +210,7 @@ const goHome = () => {
 const setLoading = (isLoading) => {
   document.body.classList.toggle("auth-checking", isLoading);
   if (authGuard) authGuard.hidden = !isLoading;
+  if (dashboardShell) dashboardShell.hidden = isLoading || !state.user;
 };
 
 const redirectHomeIfUnauthed = () => {
@@ -810,6 +829,7 @@ editorModal.addEventListener("click", (event) => {
 
 document.getElementById("logoutBtn").addEventListener("click", async () => {
   try {
+    const supabase = await getSupabase();
     await supabase.auth.signOut();
   } finally {
     goHome();
@@ -876,7 +896,13 @@ const applyAuthenticatedUser = async (sessionUser, detail = "Workspace loaded fr
 
 const bootstrap = async () => {
   try {
-    const { data: { session } } = await supabase.auth.getSession();
+    setLoading(true);
+    const supabase = await getSupabase();
+    const { data: { session } } = await withTimeout(
+      supabase.auth.getSession(),
+      8000,
+      "Session lookup timed out."
+    );
     if (!session) {
       redirectHomeIfUnauthed();
       return;
@@ -892,26 +918,40 @@ const bootstrap = async () => {
   }
 };
 
-const { data: { subscription: authSubscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+const bindAuthListener = async () => {
   try {
-    if (!session) {
-      state.user = null;
-      redirectHomeIfUnauthed();
-      return;
+    const supabase = await getSupabase();
+    if (authSubscription) {
+      authSubscription.unsubscribe();
     }
+    const { data } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      try {
+        if (!session) {
+          state.user = null;
+          redirectHomeIfUnauthed();
+          return;
+        }
 
-    await applyAuthenticatedUser(session.user, "Session refreshed from Supabase");
+        await applyAuthenticatedUser(session.user, "Session refreshed from Supabase");
+      } catch (_error) {
+        state.user = null;
+        redirectHomeIfUnauthed();
+      } finally {
+        setLoading(false);
+        renderProtectedContent();
+      }
+    });
+    authSubscription = data.subscription;
   } catch (_error) {
     state.user = null;
-    redirectHomeIfUnauthed();
-  } finally {
     setLoading(false);
-    renderProtectedContent();
+    redirectHomeIfUnauthed();
   }
-});
+};
 
 window.addEventListener("pagehide", () => {
-  authSubscription.unsubscribe();
+  authSubscription?.unsubscribe();
 }, { once: true });
 
+bindAuthListener();
 bootstrap();
