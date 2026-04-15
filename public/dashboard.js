@@ -1,3 +1,5 @@
+import { supabase } from "./lib/supabaseClient.js";
+
 const apiBase = window.location.protocol === "file:" ? "http://localhost:3000" : "";
 
 const api = {
@@ -13,19 +15,7 @@ const appRoutes = {
   home: window.location.protocol === "file:" ? "./index.html" : "/"
 };
 
-const demoKeys = {
-  user: "hippovault-demo-user",
-  enabled: "hippovault-demo-enabled",
-  data: "hippovault-demo-data"
-};
-
-const authStorageKeys = {
-  token: "token",
-  user: "user"
-};
-
 const localAuthKeys = {
-  session: "hippovault-local-session",
   dataPrefix: "hippovault-local-data-"
 };
 
@@ -42,7 +32,7 @@ const state = {
   userLists: [],
   defaultLists: defaultListSeed.map((item) => ({ ...item })),
   reviews: [],
-  mode: "api",
+  mode: "local",
   filters: {
     accounts: "",
     diary: "",
@@ -110,17 +100,9 @@ const setSyncState = (title, detail) => {
 };
 
 const updateSecuritySummary = () => {
-  const modeLabel = state.mode === "demo"
-    ? "Demo Sandbox"
-    : state.mode === "local"
-      ? "Browser Workspace"
-      : "Protected";
+  const modeLabel = state.mode === "local" ? "Browser Workspace" : "Protected";
   const securityParts = [
-    state.mode === "demo"
-      ? "Local demo data only"
-      : state.mode === "local"
-        ? "Browser-cached workspace storage"
-        : "Encrypted server storage",
+    state.mode === "local" ? "Browser-cached workspace storage" : "Encrypted server storage",
     window.location.protocol === "https:" ? "HTTPS transport" : "non-HTTPS environment",
     `${state.accounts.length} accounts`,
     `${state.diaryEntries.length} diary entries`
@@ -149,9 +131,14 @@ const parseJsonSafe = async (response) => {
   }
 };
 
+const getActiveSession = async () => {
+  const { data: { session } } = await supabase.auth.getSession();
+  return session || null;
+};
+
 const apiRequest = async (url, options = {}) => {
   const headers = new Headers(options.headers || {});
-  const token = getStoredToken();
+  const token = (await getActiveSession())?.access_token || "";
   if (token && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${token}`);
   }
@@ -177,55 +164,7 @@ const apiRequest = async (url, options = {}) => {
   return payload;
 };
 
-const getDemoUser = () => {
-  try {
-    return JSON.parse(localStorage.getItem(demoKeys.user) || "null");
-  } catch (_error) {
-    return null;
-  }
-};
-
-const getStoredToken = () => localStorage.getItem(authStorageKeys.token) || "";
-
-const getStoredUser = () => {
-  try {
-    return JSON.parse(localStorage.getItem(authStorageKeys.user) || "null");
-  } catch (_error) {
-    return null;
-  }
-};
-
-const persistAuth = (receivedToken, userData) => {
-  if (receivedToken) {
-    localStorage.setItem(authStorageKeys.token, receivedToken);
-  }
-  if (userData) {
-    localStorage.setItem(authStorageKeys.user, JSON.stringify(userData));
-  }
-};
-
-const clearStoredAuth = () => {
-  localStorage.removeItem(authStorageKeys.token);
-  localStorage.removeItem(authStorageKeys.user);
-};
-
-const getLocalSessionUser = () => {
-  try {
-    return JSON.parse(localStorage.getItem(localAuthKeys.session) || "null");
-  } catch (_error) {
-    return null;
-  }
-};
-
 const getLocalDataKey = (userId) => `${localAuthKeys.dataPrefix}${userId}`;
-
-const getDemoPayload = () => {
-  try {
-    return JSON.parse(localStorage.getItem(demoKeys.data) || "null");
-  } catch (_error) {
-    return null;
-  }
-};
 
 const getLocalPayload = (userId) => {
   try {
@@ -233,16 +172,6 @@ const getLocalPayload = (userId) => {
   } catch (_error) {
     return null;
   }
-};
-
-const saveDemoPayload = () => {
-  localStorage.setItem(demoKeys.data, JSON.stringify({
-    accounts: state.accounts,
-    diaryEntries: state.diaryEntries,
-    userLists: state.userLists,
-    defaultLists: state.defaultLists,
-    reviews: state.reviews
-  }));
 };
 
 const saveLocalPayload = () => {
@@ -266,7 +195,7 @@ const setLoading = (isLoading) => {
 };
 
 const redirectHomeIfUnauthed = () => {
-  clearStoredAuth();
+  window.location.href = appRoutes.home;
 };
 
 const renderProtectedContent = () => {
@@ -483,10 +412,6 @@ const syncAll = async () => {
 };
 
 const loadData = async () => {
-  if (state.mode === "demo") {
-    applyPayloadToState(getDemoPayload());
-    return;
-  }
   if (state.mode === "local") {
     applyPayloadToState(getLocalPayload(state.user?.id));
     return;
@@ -503,7 +428,7 @@ const loadData = async () => {
 };
 
 const loadReviews = async () => {
-  if (state.mode === "demo" || state.mode === "local") return;
+  if (state.mode === "local") return;
 
   const payload = await apiRequest(api.reviews);
   if (!payload.success || !Array.isArray(payload.reviews)) {
@@ -884,25 +809,9 @@ editorModal.addEventListener("click", (event) => {
 });
 
 document.getElementById("logoutBtn").addEventListener("click", async () => {
-  if (state.mode === "demo") {
-    clearStoredAuth();
-    localStorage.removeItem(demoKeys.user);
-    localStorage.removeItem(demoKeys.enabled);
-    localStorage.removeItem(demoKeys.data);
-    goHome();
-    return;
-  }
-  if (state.mode === "local") {
-    clearStoredAuth();
-    localStorage.removeItem(localAuthKeys.session);
-    goHome();
-    return;
-  }
-
   try {
-    await apiRequest(api.logout, { method: "POST" });
+    await supabase.auth.signOut();
   } finally {
-    clearStoredAuth();
     goHome();
   }
 });
@@ -911,7 +820,7 @@ exportBtn.addEventListener("click", async () => {
   exportBtn.disabled = true;
   exportBtn.textContent = "Exporting...";
   try {
-    if (state.mode === "demo" || state.mode === "local") {
+    if (state.mode === "local") {
       downloadJsonFile("hippovault-demo-export.json", {
         exportedAt: new Date().toISOString(),
         user: state.user,
@@ -942,120 +851,67 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-const bootstrapDemo = () => {
-  const demoUser = getDemoUser();
-  if (!demoUser) {
-    return false;
-  }
-
-  state.mode = "demo";
-  state.user = demoUser;
-  persistAuth(getStoredToken(), demoUser);
-  userPill.textContent = `${demoUser.name} | demo mode`;
-  applyPayloadToState(getDemoPayload());
-  document.getElementById("reviewName").value = demoUser.name || "";
-  document.getElementById("reviewEmail").value = demoUser.email || "";
-  setSyncState("Local", "Demo workspace loaded in browser storage");
-  renderAll();
-  return true;
+const buildUserIdentity = (user) => {
+  const metadataName = user?.user_metadata?.full_name || user?.user_metadata?.name || "";
+  return {
+    id: user?.id || "",
+    email: user?.email || "",
+    name: metadataName || user?.email?.split("@")[0] || "User"
+  };
 };
 
-const bootstrapLocal = () => {
-  const localUser = getLocalSessionUser();
-  if (!localUser) {
-    return false;
-  }
-
+const applyAuthenticatedUser = async (sessionUser, detail = "Workspace loaded from browser storage") => {
+  const user = buildUserIdentity(sessionUser);
   state.mode = "local";
-  state.user = localUser;
-  persistAuth(getStoredToken(), localUser);
-  userPill.textContent = `${localUser.name} | local test mode`;
-  applyPayloadToState(getLocalPayload(localUser.id));
-  document.getElementById("reviewName").value = localUser.name || "";
-  document.getElementById("reviewEmail").value = localUser.email || "";
-  setSyncState("Local", "Test workspace loaded from browser storage");
-  renderAll();
-  return true;
-};
-
-const bootstrapCached = (cachedUser, detail = "Cached workspace restored from browser storage") => {
-  if (!cachedUser) {
-    return false;
-  }
-
-  state.mode = "local";
-  state.user = cachedUser;
-  persistAuth(getStoredToken(), cachedUser);
-  userPill.textContent = `${cachedUser.name} | cached session`;
-  applyPayloadToState(getLocalPayload(cachedUser.id));
-  document.getElementById("reviewName").value = cachedUser.name || "";
-  document.getElementById("reviewEmail").value = cachedUser.email || "";
+  state.user = user;
+  userPill.textContent = `${user.name} | ${user.email}`;
+  await loadData();
+  document.getElementById("reviewName").value = user.name || "";
+  document.getElementById("reviewEmail").value = user.email || "";
   setSyncState("Local", detail);
+  await loadReviews();
   renderAll();
-  return true;
+  renderProtectedContent();
 };
 
 const bootstrap = async () => {
-  let shouldRedirectHome = false;
-
   try {
-    const storedToken = getStoredToken();
-    const storedUser = getStoredUser();
-    if (!storedToken) {
-      shouldRedirectHome = true;
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      redirectHomeIfUnauthed();
       return;
     }
 
-    const demoUser = getDemoUser();
-    if (demoUser) {
-      if (!bootstrapDemo()) shouldRedirectHome = true;
-      return;
-    }
-
-    const localUser = getLocalSessionUser();
-    if (localUser) {
-      if (!bootstrapLocal()) shouldRedirectHome = true;
-      return;
-    }
-
-    if (storedUser && !apiBase) {
-      if (!bootstrapCached(storedUser)) shouldRedirectHome = true;
-      return;
-    }
-
-    const session = await apiRequest(api.me);
-    if (session.success && session.user) {
-      state.user = session.user;
-      persistAuth(storedToken, session.user);
-      userPill.textContent = `${session.user.name} | ${session.user.email}`;
-      document.getElementById("reviewName").value = session.user.name || "";
-      document.getElementById("reviewEmail").value = session.user.email || "";
-      await loadData();
-      await loadReviews();
-      renderAll();
-      return;
-    }
-
-    if (storedUser) {
-      bootstrapCached(storedUser);
-      return;
-    }
-
-    shouldRedirectHome = true;
+    await applyAuthenticatedUser(session.user);
   } catch (_error) {
-    const storedUser = getStoredUser();
-    if (storedUser && bootstrapCached(storedUser, "API session check failed, restored cached workspace")) {
-      return;
-    }
-    shouldRedirectHome = true;
+    state.user = null;
+    redirectHomeIfUnauthed();
   } finally {
     setLoading(false);
     renderProtectedContent();
-    if (shouldRedirectHome || !state.user) {
-      redirectHomeIfUnauthed();
-      goHome();
-    }
   }
 };
+
+const { data: { subscription: authSubscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+  try {
+    if (!session) {
+      state.user = null;
+      redirectHomeIfUnauthed();
+      return;
+    }
+
+    await applyAuthenticatedUser(session.user, "Session refreshed from Supabase");
+  } catch (_error) {
+    state.user = null;
+    redirectHomeIfUnauthed();
+  } finally {
+    setLoading(false);
+    renderProtectedContent();
+  }
+});
+
+window.addEventListener("pagehide", () => {
+  authSubscription.unsubscribe();
+}, { once: true });
 
 bootstrap();
