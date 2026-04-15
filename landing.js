@@ -140,6 +140,24 @@ const createLocalUser = ({ name, email, password }) => {
   return user;
 };
 
+const upsertLocalUser = ({ name, email, password }) => {
+  const users = getLocalUsers();
+  const existingIndex = users.findIndex((user) => user.email === email);
+
+  if (existingIndex >= 0) {
+    const updatedUser = {
+      ...users[existingIndex],
+      name: name || users[existingIndex].name,
+      password
+    };
+    users[existingIndex] = updatedUser;
+    saveLocalUsers(users);
+    return updatedUser;
+  }
+
+  return createLocalUser({ name, email, password });
+};
+
 const isRecoverableAuthError = (error) => {
   const message = String(error?.message || "").toLowerCase();
   return [
@@ -323,6 +341,21 @@ const buildUserIdentity = (user) => {
   };
 };
 
+const getFriendlyAuthMessage = (error) => {
+  const message = String(error?.message || "").trim();
+  const normalized = message.toLowerCase();
+
+  if (normalized.includes("invalid login credentials")) {
+    return "Login failed. Check your email/password, use the demo account, or create a browser-local account with Sign Up.";
+  }
+
+  if (normalized.includes("email not confirmed")) {
+    return "Email not confirmed yet. Use the email link from signup, or create a browser-local account with Sign Up.";
+  }
+
+  return message || "Authentication failed.";
+};
+
 const hydrateSession = async () => {
   const storedToken = getStoredToken();
   const storedUser = getStoredUser();
@@ -439,9 +472,14 @@ authForm.addEventListener("submit", async (event) => {
         return;
       }
 
-      setStatus("Account created. Check your email for the confirmation link, then log in.", "success");
-      updateAuthMode("login");
-      authEmail.value = email;
+      const localUser = upsertLocalUser({ name, email, password });
+      startLocalSession({
+        id: localUser.id,
+        name: localUser.name,
+        email: localUser.email
+      });
+      setStatus("Account created. Cloud confirmation may still be pending, so this browser will use a local session for now.", "success");
+      goToDashboard();
       return;
     }
 
@@ -475,7 +513,7 @@ authForm.addEventListener("submit", async (event) => {
       return;
     }
 
-    setStatus(error.message || "Authentication failed.", "error");
+    setStatus(getFriendlyAuthMessage(error), "error");
   }
 });
 
