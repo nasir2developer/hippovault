@@ -5,6 +5,8 @@ require("dotenv").config();
 const app = express();
 const port = Number(process.env.PORT || 3000);
 const publicDir = path.join(__dirname, "public");
+const HARDCODED_CLERK_PUBLISHABLE_KEY = "pk_test_Y2FwaXRhbC1raXdpLTI3LmNsZXJrLmFjY291bnRzLmRldiQ";
+const HARDCODED_CLERK_SECRET_KEY = "sk_test_bAhk8B8TBmqndvT8resKCJ1I15hUCctowgF3NgBaI6";
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "100kb" }));
@@ -24,12 +26,15 @@ app.get("/api/config", (_req, res) => {
     "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
     "CLERK_PUBLISHABLE_KEY",
     "PUBLIC_CLERK_PUBLISHABLE_KEY"
-  );
+  ) || HARDCODED_CLERK_PUBLISHABLE_KEY;
+  const clerkSecretKey = getEnv(
+    "CLERK_SECRET_KEY"
+  ) || HARDCODED_CLERK_SECRET_KEY;
 
-  if (!clerkPublishableKey) {
+  if (!clerkPublishableKey || !clerkSecretKey) {
     return res.status(503).json({
       success: false,
-      message: "Clerk environment variables are not configured."
+      message: "Clerk keys are not configured."
     });
   }
 

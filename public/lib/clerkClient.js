@@ -1,6 +1,7 @@
 import { Clerk } from "https://esm.sh/@clerk/clerk-js@5?bundle";
 
 const configApi = window.location.protocol === "file:" ? null : "/api/config";
+const HARDCODED_CLERK_PUBLISHABLE_KEY = "pk_test_Y2FwaXRhbC1raXdpLTI3LmNsZXJrLmFjY291bnRzLmRldiQ";
 let clerkPromise = null;
 
 const parseJsonSafe = async (response) => {
@@ -13,17 +14,25 @@ const parseJsonSafe = async (response) => {
 
 const loadConfig = async () => {
   if (!configApi) {
-    throw new Error("Clerk config is unavailable in file mode. Start the local server instead.");
+    return HARDCODED_CLERK_PUBLISHABLE_KEY;
   }
 
-  const response = await fetch(configApi);
-  const payload = await parseJsonSafe(response);
+  try {
+    const response = await fetch(configApi);
+    const payload = await parseJsonSafe(response);
 
-  if (!response.ok || !payload?.clerkPublishableKey) {
-    throw new Error(payload?.message || "Clerk publishable key is not configured.");
+    if (response.ok && payload?.clerkPublishableKey) {
+      return payload.clerkPublishableKey;
+    }
+  } catch (_error) {
+    // Fall through to the hardcoded key when the server config route is unavailable.
   }
 
-  return payload.clerkPublishableKey;
+  if (!HARDCODED_CLERK_PUBLISHABLE_KEY) {
+    throw new Error("Clerk publishable key is not configured.");
+  }
+
+  return HARDCODED_CLERK_PUBLISHABLE_KEY;
 };
 
 const deriveClerkDomain = (publishableKey) => {
