@@ -5,8 +5,6 @@ require("dotenv").config();
 const app = express();
 const port = Number(process.env.PORT || 3000);
 const publicDir = path.join(__dirname, "public");
-const HARDCODED_CLERK_PUBLISHABLE_KEY = "pk_test_Y2FwaXRhbC1raXdpLTI3LmNsZXJrLmFjY291bnRzLmRldiQ";
-const HARDCODED_CLERK_SECRET_KEY = "sk_test_bAhk8B8TBmqndvT8resKCJ1I15hUCctowgF3NgBaI6";
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "100kb" }));
@@ -22,19 +20,25 @@ const getEnv = (...names) => {
 };
 
 app.get("/api/config", (_req, res) => {
-  const clerkPublishableKey = getEnv(
-    "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
-    "CLERK_PUBLISHABLE_KEY",
-    "PUBLIC_CLERK_PUBLISHABLE_KEY"
-  ) || HARDCODED_CLERK_PUBLISHABLE_KEY;
-  const clerkSecretKey = getEnv(
-    "CLERK_SECRET_KEY"
-  ) || HARDCODED_CLERK_SECRET_KEY;
+  const supabaseUrl = getEnv(
+    "VITE_SUPABASE_URL",
+    "PUBLIC_SUPABASE_URL",
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "SUPABASE_URL",
+    "hippovault_SUPABASE_URL"
+  );
+  const supabaseAnonKey = getEnv(
+    "VITE_SUPABASE_ANON_KEY",
+    "PUBLIC_SUPABASE_ANON_KEY",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    "SUPABASE_ANON_KEY",
+    "hippovault_SUPABASE_ANON_KEY"
+  );
 
-  if (!clerkPublishableKey || !clerkSecretKey) {
+  if (!supabaseUrl || !supabaseAnonKey) {
     return res.status(503).json({
       success: false,
-      message: "Clerk keys are not configured."
+      message: "Supabase environment variables are not configured."
     });
   }
 
@@ -42,7 +46,8 @@ app.get("/api/config", (_req, res) => {
 
   return res.json({
     success: true,
-    clerkPublishableKey
+    supabaseUrl,
+    supabaseAnonKey
   });
 });
 
@@ -50,7 +55,7 @@ app.get("/api/health", (_req, res) => {
   res.json({
     success: true,
     message: "Hippovault is running.",
-    runtime: "static+clerk"
+    runtime: "static+supabase"
   });
 });
 
@@ -58,7 +63,7 @@ app.get("/health", (_req, res) => {
   res.json({
     success: true,
     message: "Hippovault is running.",
-    runtime: "static+clerk"
+    runtime: "static+supabase"
   });
 });
 

@@ -1,5 +1,5 @@
+import { getSupabaseClient } from "./lib/supabaseClient.js";
 import { readCookieJson, removeCookieValue, writeCookieJson } from "./lib/browserCookies.js";
-import { getClerkClient } from "./lib/clerkClient.js";
 
 const apiBase = window.location.protocol === "file:" ? "http://localhost:3000" : "";
 
@@ -53,11 +53,12 @@ const syncDetail = document.getElementById("syncDetail");
 const securityScore = document.getElementById("securityScore");
 const securityDetail = document.getElementById("securityDetail");
 const exportBtn = document.getElementById("exportBtn");
-const clerkUserButton = document.getElementById("clerkUserButton");
 const accountSearch = document.getElementById("accountSearch");
 const diarySearch = document.getElementById("diarySearch");
 const reviewSearch = document.getElementById("reviewSearch");
 let authSubscription = null;
+
+const getSupabase = async () => getSupabaseClient();
 
 const setFormStatus = (id, message, type = "") => {
   const node = document.getElementById(id);
@@ -132,13 +133,41 @@ const parseJsonSafe = async (response) => {
   }
 };
 
+const withTimeout = async (promise, ms, message) => {
+  let timeoutId = 0;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error(message)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+};
+
+const getActiveSession = async () => {
+  const supabase = await getSupabase();
+  const { data: { session } } = await withTimeout(
+    supabase.auth.getSession(),
+    8000,
+    "Session lookup timed out."
+  );
+  return session || null;
+};
+
 const apiRequest = async (url, options = {}) => {
+  const headers = new Headers(options.headers || {});
+  const token = (await getActiveSession())?.access_token || "";
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
   let response;
   try {
     response = await fetch(url, {
       credentials: "include",
       ...options,
-      headers: options.headers || {}
+      headers
     });
   } catch (_error) {
     throw new Error("Cannot reach the server.");
@@ -789,10 +818,8 @@ editorModal.addEventListener("click", (event) => {
 
 document.getElementById("logoutBtn").addEventListener("click", async () => {
   try {
-    const clerk = await getClerkClient();
-    await clerk.signOut();
-    state.user = null;
-    persistAuthenticatedUser(null);
+    const supabase = await getSupabase();
+    await supabase.auth.signOut();
   } finally {
     goHome();
   }
@@ -834,13 +861,11 @@ document.addEventListener("keydown", (event) => {
 });
 
 const buildUserIdentity = (user) => {
-  const fullName = user?.fullName || [user?.firstName, user?.lastName].filter(Boolean).join(" ") || user?.name || "";
-  const email = user?.primaryEmailAddress?.emailAddress || user?.email || "";
-
+  const metadataName = user?.user_metadata?.full_name || user?.user_metadata?.name || "";
   return {
     id: user?.id || "",
-    email,
-    name: fullName || email.split("@")[0] || "User"
+    email: user?.email || "",
+    name: metadataName || user?.email?.split("@")[0] || "User"
   };
 };
 
@@ -871,25 +896,27 @@ const applyAuthenticatedUser = async (sessionUser, detail = "Workspace restored 
   renderProtectedContent();
 };
 
-const mountUserButton = async () => {
-  if (!clerkUserButton) return;
-  const clerk = await getClerkClient();
-  clerkUserButton.innerHTML = "";
-  clerk.mountUserButton(clerkUserButton);
-};
-
 const bootstrap = async () => {
+  const cachedUser = readCookieJson(localAuthKeys.user);
+
   try {
-    const clerk = await getClerkClient();
-    if (!clerk.isSignedIn || !clerk.user) {
-      state.user = null;
-      persistAuthenticatedUser(null);
+    if (cachedUser?.id) {
+      await applyAuthenticatedUser(cachedUser, "Workspace restored from cookies");
+    }
+
+    const supabase = await getSupabase();
+    const { data: { session } } = await withTimeout(
+      supabase.auth.getSession(),
+      4000,
+      "Session lookup timed out."
+    );
+    if (!session) {
+      if (state.user) return;
       redirectHomeIfUnauthed();
       return;
     }
 
-    await applyAuthenticatedUser(clerk.user, "Workspace restored from your Clerk session");
-    await mountUserButton();
+    await applyAuthenticatedUser(session.user, "Workspace restored from your last signed-in session");
   } catch (_error) {
     if (!state.user) {
       state.user = null;
@@ -903,19 +930,20 @@ const bootstrap = async () => {
 
 const bindAuthListener = async () => {
   try {
-    const clerk = await getClerkClient();
-    authSubscription?.();
-    authSubscription = clerk.addListener(async ({ user }) => {
+    const supabase = await getSupabase();
+    if (authSubscription) {
+      authSubscription.unsubscribe();
+    }
+    const { data } = supabase.auth.onAuthStateChange(async (_event, session) => {
       try {
-        if (!user) {
+        if (!session) {
           state.user = null;
           persistAuthenticatedUser(null);
           redirectHomeIfUnauthed();
           return;
         }
 
-        await applyAuthenticatedUser(user, "Workspace restored from your Clerk session");
-        await mountUserButton();
+        await applyAuthenticatedUser(session.user, "Session refreshed from cookies");
       } catch (_error) {
         state.user = null;
         persistAuthenticatedUser(null);
@@ -925,6 +953,7 @@ const bindAuthListener = async () => {
         renderProtectedContent();
       }
     });
+    authSubscription = data.subscription;
   } catch (_error) {
     state.user = null;
     setLoading(false);
@@ -933,7 +962,7 @@ const bindAuthListener = async () => {
 };
 
 window.addEventListener("pagehide", () => {
-  authSubscription?.();
+  authSubscription?.unsubscribe();
 }, { once: true });
 
 bindAuthListener();
