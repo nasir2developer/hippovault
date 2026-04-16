@@ -1,30 +1,22 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createCookieStorage, readCookieJson, writeCookieJson } from "./browserCookies.js";
 
 const configApi = window.location.protocol === "file:" ? null : "/api/config";
 const configCacheKey = "hippovault-supabase-config";
 let supabaseClientPromise = null;
+const authStorage = createCookieStorage("hippovault-supabase-auth");
 
 const readCachedConfig = () => {
-  try {
-    const cached = sessionStorage.getItem(configCacheKey);
-    if (!cached) return null;
-    const parsed = JSON.parse(cached);
-    if (!parsed?.supabaseUrl || !parsed?.supabaseAnonKey) return null;
-    return parsed;
-  } catch (_error) {
-    return null;
-  }
+  const parsed = readCookieJson(configCacheKey);
+  if (!parsed?.supabaseUrl || !parsed?.supabaseAnonKey) return null;
+  return parsed;
 };
 
 const writeCachedConfig = (payload) => {
-  try {
-    sessionStorage.setItem(configCacheKey, JSON.stringify({
-      supabaseUrl: payload.supabaseUrl,
-      supabaseAnonKey: payload.supabaseAnonKey
-    }));
-  } catch (_error) {
-    // Ignore storage failures; runtime fetch still works.
-  }
+  writeCookieJson(configCacheKey, {
+    supabaseUrl: payload.supabaseUrl,
+    supabaseAnonKey: payload.supabaseAnonKey
+  });
 };
 
 const loadSupabaseConfig = async () => {
@@ -56,6 +48,8 @@ export const getSupabaseClient = async () => {
     supabaseClientPromise = loadSupabaseConfig()
       .then(({ supabaseUrl, supabaseAnonKey }) => createClient(supabaseUrl, supabaseAnonKey, {
         auth: {
+          storageKey: "hippovault-supabase-auth",
+          storage: authStorage,
           persistSession: true,
           autoRefreshToken: true,
           detectSessionInUrl: true

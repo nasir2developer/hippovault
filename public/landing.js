@@ -1,4 +1,5 @@
 import { getSupabaseClient } from "./lib/supabaseClient.js";
+import { readCookieJson, removeCookieValue, writeCookieJson } from "./lib/browserCookies.js";
 
 const appRoutes = {
   home: window.location.protocol === "file:" ? "./index.html" : "/",
@@ -28,6 +29,7 @@ const signupTrigger = document.getElementById("signupTrigger");
 
 let authMode = "login";
 let authSubscription = null;
+const authUserCookie = "hippovault-auth-user";
 
 const getSupabase = async () => getSupabaseClient();
 
@@ -101,6 +103,18 @@ const buildUserIdentity = (user) => {
   };
 };
 
+const persistAuthenticatedUser = (user) => {
+  if (!user) {
+    removeCookieValue(authUserCookie);
+    return;
+  }
+  writeCookieJson(authUserCookie, {
+    id: user.id,
+    email: user.email,
+    name: user.name
+  });
+};
+
 const getFriendlyAuthMessage = (error) => {
   const message = String(error?.message || "").trim();
   const normalized = message.toLowerCase();
@@ -117,18 +131,27 @@ const getFriendlyAuthMessage = (error) => {
 };
 
 const hydrateSession = async () => {
+  const cachedUser = readCookieJson(authUserCookie);
+  if (cachedUser?.id) {
+    setAuthenticatedUI(cachedUser);
+  }
+
   try {
     const supabase = await getSupabase();
     const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
     if (sessionError || !sessionData?.session) {
+      persistAuthenticatedUser(null);
       setAuthenticatedUI(null);
       return;
     }
     const sessionUser = buildUserIdentity(sessionData.session.user);
+    persistAuthenticatedUser(sessionUser);
     setAuthenticatedUI(sessionUser);
     goToDashboard();
   } catch (_error) {
-    setAuthenticatedUI(null);
+    if (!cachedUser?.id) {
+      setAuthenticatedUI(null);
+    }
   }
 };
 
@@ -179,6 +202,7 @@ authForm.addEventListener("submit", async (event) => {
       if (error) throw error;
 
       if (data.session) {
+        persistAuthenticatedUser(buildUserIdentity(data.session.user));
         goToDashboard();
         return;
       }
@@ -195,6 +219,7 @@ authForm.addEventListener("submit", async (event) => {
     });
 
     if (error) throw error;
+    persistAuthenticatedUser(buildUserIdentity(data.user));
     goToDashboard();
   } catch (error) {
     if (isRecoverableAuthError(error)) {
@@ -236,7 +261,9 @@ const bindAuthListener = async () => {
       authSubscription.unsubscribe();
     }
     const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-      setAuthenticatedUI(session ? buildUserIdentity(session.user) : null);
+      const user = session ? buildUserIdentity(session.user) : null;
+      persistAuthenticatedUser(user);
+      setAuthenticatedUI(user);
     });
     authSubscription = data.subscription;
   } catch (_error) {

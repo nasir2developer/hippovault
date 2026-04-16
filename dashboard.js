@@ -1,4 +1,5 @@
 import { getSupabaseClient } from "./lib/supabaseClient.js";
+import { readCookieJson, removeCookieValue, writeCookieJson } from "./lib/browserCookies.js";
 
 const apiBase = window.location.protocol === "file:" ? "http://localhost:3000" : "";
 
@@ -16,7 +17,8 @@ const appRoutes = {
 };
 
 const localAuthKeys = {
-  dataPrefix: "hippovault-local-data-"
+  dataPrefix: "hippovault-local-data-",
+  user: "hippovault-auth-user"
 };
 
 const defaultListSeed = [
@@ -43,7 +45,6 @@ const state = {
 
 const dashboardShell = document.querySelector(".dashboard-shell");
 const userPill = document.getElementById("userPill");
-const authGuard = document.getElementById("authGuard");
 const editorModal = document.getElementById("editorModal");
 const editorBody = document.getElementById("editorBody");
 const editorTitle = document.getElementById("editorTitle");
@@ -103,7 +104,7 @@ const setSyncState = (title, detail) => {
 const updateSecuritySummary = () => {
   const modeLabel = state.mode === "local" ? "Browser Workspace" : "Protected";
   const securityParts = [
-    state.mode === "local" ? "Browser-cached workspace storage" : "Encrypted server storage",
+    state.mode === "local" ? "Cookie-backed workspace storage" : "Encrypted server storage",
     window.location.protocol === "https:" ? "HTTPS transport" : "non-HTTPS environment",
     `${state.accounts.length} accounts`,
     `${state.diaryEntries.length} diary entries`
@@ -185,22 +186,18 @@ const apiRequest = async (url, options = {}) => {
 const getLocalDataKey = (userId) => `${localAuthKeys.dataPrefix}${userId}`;
 
 const getLocalPayload = (userId) => {
-  try {
-    return JSON.parse(localStorage.getItem(getLocalDataKey(userId)) || "null");
-  } catch (_error) {
-    return null;
-  }
+  return readCookieJson(getLocalDataKey(userId));
 };
 
 const saveLocalPayload = () => {
   if (!state.user?.id) return;
-  localStorage.setItem(getLocalDataKey(state.user.id), JSON.stringify({
+  writeCookieJson(getLocalDataKey(state.user.id), {
     accounts: state.accounts,
     diaryEntries: state.diaryEntries,
     userLists: state.userLists,
     defaultLists: state.defaultLists,
     reviews: state.reviews
-  }));
+  });
 };
 
 const goHome = () => {
@@ -209,8 +206,7 @@ const goHome = () => {
 
 const setLoading = (isLoading) => {
   document.body.classList.toggle("auth-checking", isLoading);
-  if (authGuard) authGuard.hidden = true;
-  if (dashboardShell) dashboardShell.hidden = isLoading || !state.user;
+  if (dashboardShell) dashboardShell.hidden = !state.user;
 };
 
 const redirectHomeIfUnauthed = () => {
@@ -218,7 +214,6 @@ const redirectHomeIfUnauthed = () => {
 };
 
 const renderProtectedContent = () => {
-  if (authGuard && !authGuard.hidden) return;
   if (!dashboardShell) return;
   dashboardShell.hidden = !state.user;
 };
@@ -880,10 +875,23 @@ const buildUserIdentity = (user) => {
   };
 };
 
-const applyAuthenticatedUser = async (sessionUser, detail = "Workspace loaded from browser storage") => {
+const persistAuthenticatedUser = (user) => {
+  if (!user?.id) {
+    removeCookieValue(localAuthKeys.user);
+    return;
+  }
+  writeCookieJson(localAuthKeys.user, {
+    id: user.id,
+    email: user.email,
+    name: user.name
+  });
+};
+
+const applyAuthenticatedUser = async (sessionUser, detail = "Workspace restored from cookies") => {
   const user = buildUserIdentity(sessionUser);
   state.mode = "local";
   state.user = user;
+  persistAuthenticatedUser(user);
   userPill.textContent = `${user.name} | ${user.email}`;
   await loadData();
   document.getElementById("reviewName").value = user.name || "";
@@ -895,8 +903,13 @@ const applyAuthenticatedUser = async (sessionUser, detail = "Workspace loaded fr
 };
 
 const bootstrap = async () => {
+  const cachedUser = readCookieJson(localAuthKeys.user);
+
   try {
-    setLoading(true);
+    if (cachedUser?.id) {
+      await applyAuthenticatedUser(cachedUser, "Workspace restored from cookies");
+    }
+
     const supabase = await getSupabase();
     const { data: { session } } = await withTimeout(
       supabase.auth.getSession(),
@@ -904,14 +917,17 @@ const bootstrap = async () => {
       "Session lookup timed out."
     );
     if (!session) {
+      if (state.user) return;
       redirectHomeIfUnauthed();
       return;
     }
 
-    await applyAuthenticatedUser(session.user);
+    await applyAuthenticatedUser(session.user, "Workspace restored from your last signed-in session");
   } catch (_error) {
-    state.user = null;
-    redirectHomeIfUnauthed();
+    if (!state.user) {
+      state.user = null;
+      redirectHomeIfUnauthed();
+    }
   } finally {
     setLoading(false);
     renderProtectedContent();
@@ -928,13 +944,15 @@ const bindAuthListener = async () => {
       try {
         if (!session) {
           state.user = null;
+          persistAuthenticatedUser(null);
           redirectHomeIfUnauthed();
           return;
         }
 
-        await applyAuthenticatedUser(session.user, "Session refreshed from Supabase");
+        await applyAuthenticatedUser(session.user, "Session refreshed from cookies");
       } catch (_error) {
         state.user = null;
+        persistAuthenticatedUser(null);
         redirectHomeIfUnauthed();
       } finally {
         setLoading(false);
