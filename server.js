@@ -20,25 +20,16 @@ const getEnv = (...names) => {
 };
 
 app.get("/api/config", (_req, res) => {
-  const supabaseUrl = getEnv(
-    "VITE_SUPABASE_URL",
-    "PUBLIC_SUPABASE_URL",
-    "NEXT_PUBLIC_SUPABASE_URL",
-    "SUPABASE_URL",
-    "hippovault_SUPABASE_URL"
-  );
-  const supabaseAnonKey = getEnv(
-    "VITE_SUPABASE_ANON_KEY",
-    "PUBLIC_SUPABASE_ANON_KEY",
-    "NEXT_PUBLIC_SUPABASE_ANON_KEY",
-    "SUPABASE_ANON_KEY",
-    "hippovault_SUPABASE_ANON_KEY"
+  const clerkPublishableKey = getEnv(
+    "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
+    "CLERK_PUBLISHABLE_KEY",
+    "PUBLIC_CLERK_PUBLISHABLE_KEY"
   );
 
-  if (!supabaseUrl || !supabaseAnonKey) {
+  if (!clerkPublishableKey) {
     return res.status(503).json({
       success: false,
-      message: "Supabase environment variables are not configured."
+      message: "Clerk environment variables are not configured."
     });
   }
 
@@ -46,8 +37,7 @@ app.get("/api/config", (_req, res) => {
 
   return res.json({
     success: true,
-    supabaseUrl,
-    supabaseAnonKey
+    clerkPublishableKey
   });
 });
 
@@ -55,7 +45,7 @@ app.get("/api/health", (_req, res) => {
   res.json({
     success: true,
     message: "Hippovault is running.",
-    runtime: "static+supabase"
+    runtime: "static+clerk"
   });
 });
 
@@ -63,7 +53,7 @@ app.get("/health", (_req, res) => {
   res.json({
     success: true,
     message: "Hippovault is running.",
-    runtime: "static+supabase"
+    runtime: "static+clerk"
   });
 });
 

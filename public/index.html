@@ -247,30 +247,10 @@
       <div class="eyebrow">Secure Access</div>
       <h2 id="authTitle">Login</h2>
       <p class="modal-copy" id="authSubtitle">Access your protected Hippovault workspace.</p>
-      <form id="authForm" class="stack-form" novalidate>
-        <div class="field hidden" id="authNameField">
-          <label for="authName">Full name</label>
-          <input id="authName" name="name" type="text" placeholder="Enter your full name" />
-        </div>
-        <div class="field">
-          <label for="authEmail">Email</label>
-          <input id="authEmail" name="email" type="email" placeholder="name@example.com" required />
-        </div>
-        <div class="field">
-          <label for="authPassword">Password</label>
-          <input id="authPassword" name="password" type="password" placeholder="Minimum 8 characters" required />
-        </div>
-        <div class="field hidden" id="authConfirmField">
-          <label for="authConfirmPassword">Confirm password</label>
-          <input id="authConfirmPassword" name="confirmPassword" type="password" placeholder="Repeat your password" />
-        </div>
-        <div class="field hidden" id="authOtpField">
-          <label for="authOtp">One-time password</label>
-          <input id="authOtp" name="otp" type="text" inputmode="numeric" maxlength="6" placeholder="Enter 6-digit code" />
-        </div>
+      <div class="clerk-auth-shell" id="authMount"></div>
+      <div class="stack-form">
         <div class="form-status" id="authStatus" aria-live="polite"></div>
-        <button class="btn btn-primary btn-large" id="authSubmit" type="submit">Login</button>
-      </form>
+      </div>
       <div class="modal-switch">
         <span id="authSwitchText">Need a new account?</span>
         <button class="btn btn-ghost" id="authSwitch" type="button">Sign Up</button>
